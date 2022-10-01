@@ -57,7 +57,7 @@ namespace Common {
 // Note: This is supposed to be used with absl::flat_hash_map only.
 // TODO: Add support for evaluating dynamic Istio dimensions.
 struct IstioDimensions {
-#define DEFINE_FIELD(name) std::string(name);
+#define DEFINE_FIELD(name) std::string name;
   STD_ISTIO_DIMENSIONS(DEFINE_FIELD)
 #undef DEFINE_FIELD
 
