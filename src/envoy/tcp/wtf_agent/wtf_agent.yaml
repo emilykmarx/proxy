@@ -1,0 +1,25 @@
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: wtfagent
+  namespace: default
+spec:
+  priority: -1
+  configPatches:
+  - applyTo: NETWORK_FILTER
+    match:
+      context: ANY
+      listener:
+        filterChain:
+          filter:
+            name: "envoy.filters.network.tcp_proxy"
+    patch:
+      operation: INSERT_BEFORE
+      value:
+        name: "envoy.filters.network.wtf_agent" # Not sure if matters
+        typed_config:
+          #"@type": "type.googleapis.com/envoy.tcp.wtfagent.config.WTFAgent"
+          "@type": type.googleapis.com/udpa.type.v1.TypedStruct
+          #"@type": envoy.tcp.wtfagent.config.WTFAgent
+          #value:
+          type_url: "type.googleapis.com/envoy.tcp.wtfagent.config.WTFAgent"
