@@ -30,11 +30,9 @@ envoy_cc_library(
     name = "metadata_exchange",
     srcs = [
         "metadata_exchange.cc",
-        "metadata_exchange_initial_header.cc",
     ],
     hdrs = [
         "metadata_exchange.h",
-        "metadata_exchange_initial_header.h",
     ],
     repository = "@envoy",
     deps = [

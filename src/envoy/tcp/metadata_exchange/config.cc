@@ -34,12 +34,11 @@ Network::FilterFactoryCb createFilterFactoryHelper(
 
   MetadataExchangeConfigSharedPtr filter_config(
       std::make_shared<MetadataExchangeConfig>(
-          StatPrefix, proto_config.protocol(), filter_direction,
-          context.scope()));
+          proto_config.protocol(), filter_direction));
   return [filter_config,
           &context](Network::FilterManager& filter_manager) -> void {
     filter_manager.addFilter(std::make_shared<MetadataExchangeFilter>(
-        filter_config, context.localInfo()));
+                             filter_config));
   };
 }
 }  // namespace

@@ -20,7 +20,6 @@
 #include "gtest/gtest.h"
 #include "source/common/buffer/buffer_impl.h"
 #include "source/common/protobuf/protobuf.h"
-#include "src/envoy/tcp/metadata_exchange/metadata_exchange_initial_header.h"
 #include "test/mocks/local_info/mocks.h"
 #include "test/mocks/network/mocks.h"
 #include "test/mocks/protobuf/mocks.h"
@@ -32,6 +31,7 @@ using testing::ReturnRef;
 
 namespace Envoy {
 namespace Tcp {
+// TODO update this to test the right stuff
 namespace MetadataExchange {
 namespace {
 
