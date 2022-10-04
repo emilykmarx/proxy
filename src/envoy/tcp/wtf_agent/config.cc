@@ -43,10 +43,10 @@ namespace Tcp {
 namespace WTFAgent {
 namespace {
 
-static constexpr char StatPrefix[] = "wtf_agent.";
+static constexpr char StatPrefix[] = "wtfagent.";
 
 Network::FilterFactoryCb createFilterFactoryHelper(
-    const envoy::tcp::wtf_agent::config::WTFAgent& /*proto_config*/,
+    const envoy::tcp::wtfagent::config::WTFAgent& /*proto_config*/,
     Server::Configuration::CommonFactoryContext& context,
     FilterDirection filter_direction) {
 
@@ -74,7 +74,7 @@ WTFAgentConfigFactory::createFilterFactoryFromProto(
     Server::Configuration::FactoryContext& context) {
   return createFilterFactory(
       dynamic_cast<
-          const envoy::tcp::wtf_agent::config::WTFAgent&>(
+          const envoy::tcp::wtfagent::config::WTFAgent&>(
           config),
       context);
 }
@@ -82,11 +82,11 @@ WTFAgentConfigFactory::createFilterFactoryFromProto(
 ProtobufTypes::MessagePtr
 WTFAgentConfigFactory::createEmptyConfigProto() {
   return std::make_unique<
-      envoy::tcp::wtf_agent::config::WTFAgent>();
+      envoy::tcp::wtfagent::config::WTFAgent>();
 }
 
 Network::FilterFactoryCb WTFAgentConfigFactory::createFilterFactory(
-    const envoy::tcp::wtf_agent::config::WTFAgent& proto_config,
+    const envoy::tcp::wtfagent::config::WTFAgent& proto_config,
     Server::Configuration::FactoryContext& context) {
   return createFilterFactoryHelper(proto_config, context,
                                    FilterDirection::Downstream);
@@ -98,7 +98,7 @@ WTFAgentUpstreamConfigFactory::createFilterFactoryFromProto(
     Server::Configuration::CommonFactoryContext& context) {
   return createFilterFactory(
       dynamic_cast<
-          const envoy::tcp::wtf_agent::config::WTFAgent&>(
+          const envoy::tcp::wtfagent::config::WTFAgent&>(
           config),
       context);
 }
@@ -106,12 +106,12 @@ WTFAgentUpstreamConfigFactory::createFilterFactoryFromProto(
 ProtobufTypes::MessagePtr
 WTFAgentUpstreamConfigFactory::createEmptyConfigProto() {
   return std::make_unique<
-      envoy::tcp::wtf_agent::config::WTFAgent>();
+      envoy::tcp::wtfagent::config::WTFAgent>();
 }
 
 Network::FilterFactoryCb
 WTFAgentUpstreamConfigFactory::createFilterFactory(
-    const envoy::tcp::wtf_agent::config::WTFAgent& proto_config,
+    const envoy::tcp::wtfagent::config::WTFAgent& proto_config,
     Server::Configuration::CommonFactoryContext& context) {
   return createFilterFactoryHelper(proto_config, context,
                                    FilterDirection::Upstream);

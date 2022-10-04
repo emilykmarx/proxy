@@ -15,11 +15,11 @@
 
 syntax = "proto3";
 
-package envoy.tcp.wtf_agent.config;
+package envoy.tcp.wtfagent.config;
 
 option java_outer_classname = "WTFAgentProto";
 option java_multiple_files = true;
-option java_package = "io.envoyproxy.envoy.tcp.wtf_agent.config";
+option java_package = "io.envoyproxy.envoy.tcp.wtfagent.config";
 option go_package = "WTFAgent";
 
 // [#protodoc-title: WTFAgent protocol match and data transfer]

@@ -41,7 +41,7 @@ class WTFAgentConfigFactory
 
  private:
   Network::FilterFactoryCb createFilterFactory(
-      const envoy::tcp::wtf_agent::config::WTFAgent&
+      const envoy::tcp::wtfagent::config::WTFAgent&
           proto_config,
       Server::Configuration::FactoryContext& context);
 };
@@ -65,7 +65,7 @@ class WTFAgentUpstreamConfigFactory
 
  private:
   Network::FilterFactoryCb createFilterFactory(
-      const envoy::tcp::wtf_agent::config::WTFAgent&
+      const envoy::tcp::wtfagent::config::WTFAgent&
           proto_config,
       Server::Configuration::CommonFactoryContext& context);
 };
