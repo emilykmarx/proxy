@@ -16,26 +16,18 @@
 #pragma once
 
 #include <string>
+#include <map>
 
 #include "envoy/network/filter.h"
-#include "envoy/runtime/runtime.h"
-#include "envoy/stats/scope.h"
-#include "envoy/stats/stats_macros.h"
-#include "envoy/stream_info/filter_state.h"
-#include "extensions/common/context.h"
-#include "extensions/common/node_info_bfbs_generated.h"
-#include "extensions/common/proto_util.h"
-#include "source/common/common/stl_helpers.h"
-#include "source/common/protobuf/protobuf.h"
-#include "source/extensions/filters/common/expr/cel_state.h"
 #include "src/envoy/tcp/metadata_exchange/config/metadata_exchange.pb.h"
+#include "envoy/upstream/cluster_manager.h"
 
 namespace Envoy {
 namespace Tcp {
 // TODO properly integrate this into proxy as a new filter.
 // Put it here for now bc I didn't want to figure out how to do that.
 // At least rename "metadata exchange" to the extent possible.
-// Also remove unused deps & code (maybe incl upstream filter).
+// Also remove unused code (note must modify istio/proxy to remove upstream filter)
 namespace MetadataExchange {
 
 /**
@@ -65,10 +57,11 @@ using MetadataExchangeConfigSharedPtr = std::shared_ptr<MetadataExchangeConfig>;
  * A MetadataExchange filter instance. One per connection.
  */
 class MetadataExchangeFilter : public Network::Filter,
-                               protected Logger::Loggable<Logger::Id::filter> {
+                               protected Logger::Loggable<Logger::Id::filter>,
+                               public Http::AsyncClient::Callbacks {
  public:
-  MetadataExchangeFilter(MetadataExchangeConfigSharedPtr config)
-      : config_(config) {}
+  MetadataExchangeFilter(MetadataExchangeConfigSharedPtr config, Upstream::ClusterManager& cm)
+      : config_(config), cm_(cm) {}
 
   // Network::ReadFilter
   Network::FilterStatus onData(Buffer::Instance& data,
@@ -93,6 +86,16 @@ class MetadataExchangeFilter : public Network::Filter,
   Network::ReadFilterCallbacks* read_callbacks_{};
   // Write callback instance.
   Network::WriteFilterCallbacks* write_callbacks_{};
+  // TODO share across workers
+  //std::map<std::string, Network::Connection> conns_written{};
+  Upstream::ClusterManager& cm_;
+
+  // Http::AsyncClient::Callbacks
+  void onSuccess(const Http::AsyncClient::Request&, Http::ResponseMessagePtr&& response) override;
+  void onFailure(const Http::AsyncClient::Request&,
+                 Http::AsyncClient::FailureReason reason) override;
+  void onBeforeFinalizeUpstreamSpan(Envoy::Tracing::Span&,
+                  const Http::ResponseHeaderMap*) override {};
 };
 
 }  // namespace MetadataExchange

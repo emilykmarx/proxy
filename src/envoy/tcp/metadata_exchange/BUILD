@@ -20,7 +20,6 @@
 load(
     "@envoy//bazel:envoy_build_system.bzl",
     "envoy_cc_library",
-    "envoy_cc_test",
     "envoy_package",
 )
 
@@ -36,24 +35,12 @@ envoy_cc_library(
     ],
     repository = "@envoy",
     deps = [
-        "//extensions/common:context",
-        "//extensions/common:proto_util",
         "//src/envoy/tcp/metadata_exchange/config:metadata_exchange_cc_proto",
-        "@com_google_absl//absl/base:core_headers",
-        "@com_google_absl//absl/base:endian",
-        "@com_google_absl//absl/strings",
-        "@envoy//envoy/local_info:local_info_interface",
         "@envoy//envoy/network:connection_interface",
         "@envoy//envoy/network:filter_interface",
-        "@envoy//envoy/runtime:runtime_interface",
-        "@envoy//envoy/stats:stats_macros",
-        "@envoy//envoy/stream_info:filter_state_interface",
-        "@envoy//source/common/http:utility_lib",
-        "@envoy//source/common/network:utility_lib",
-        "@envoy//source/common/protobuf",
-        "@envoy//source/common/protobuf:utility_lib",
-        "@envoy//source/extensions/filters/common/expr:cel_state_lib",
-        "@envoy//source/extensions/filters/network:well_known_names",
+        "@envoy//source/common/buffer:buffer_lib",
+        "@envoy//envoy/upstream:cluster_manager_interface",
+        "@envoy//source/common/http:message_lib",
     ],
 )
 
@@ -66,24 +53,7 @@ envoy_cc_library(
     deps = [
         ":metadata_exchange",
         "//src/envoy/tcp/metadata_exchange/config:metadata_exchange_cc_proto",
-        "//src/envoy/utils:utils_lib",
         "@envoy//envoy/registry",
         "@envoy//envoy/server:filter_config_interface",
-    ],
-)
-
-envoy_cc_test(
-    name = "metadataexchange_test",
-    srcs = [
-        "metadata_exchange_test.cc",
-    ],
-    repository = "@envoy",
-    deps = [
-        ":config_lib",
-        ":metadata_exchange",
-        "@envoy//source/common/protobuf",
-        "@envoy//test/mocks/local_info:local_info_mocks",
-        "@envoy//test/mocks/network:network_mocks",
-        "@envoy//test/mocks/protobuf:protobuf_mocks",
     ],
 )

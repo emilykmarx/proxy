@@ -15,7 +15,6 @@
 
 #include "src/envoy/tcp/metadata_exchange/config.h"
 
-#include "envoy/network/connection.h"
 #include "envoy/registry/registry.h"
 #include "src/envoy/tcp/metadata_exchange/metadata_exchange.h"
 
@@ -24,21 +23,17 @@ namespace Tcp {
 namespace MetadataExchange {
 namespace {
 
-static constexpr char StatPrefix[] = "metadata_exchange.";
-
 Network::FilterFactoryCb createFilterFactoryHelper(
     const envoy::tcp::metadataexchange::config::MetadataExchange& proto_config,
-    Server::Configuration::CommonFactoryContext& context,
-    FilterDirection filter_direction) {
-  ASSERT(!proto_config.protocol().empty());
+    FilterDirection filter_direction,
+    Server::Configuration::CommonFactoryContext& context) {
 
   MetadataExchangeConfigSharedPtr filter_config(
       std::make_shared<MetadataExchangeConfig>(
           proto_config.protocol(), filter_direction));
-  return [filter_config,
-          &context](Network::FilterManager& filter_manager) -> void {
+  return [filter_config, &context](Network::FilterManager& filter_manager) -> void {
     filter_manager.addFilter(std::make_shared<MetadataExchangeFilter>(
-                             filter_config));
+                             filter_config, context.clusterManager()));
   };
 }
 }  // namespace
@@ -50,8 +45,7 @@ MetadataExchangeConfigFactory::createFilterFactoryFromProto(
   return createFilterFactory(
       dynamic_cast<
           const envoy::tcp::metadataexchange::config::MetadataExchange&>(
-          config),
-      context);
+          config), context);
 }
 
 ProtobufTypes::MessagePtr
@@ -63,8 +57,8 @@ MetadataExchangeConfigFactory::createEmptyConfigProto() {
 Network::FilterFactoryCb MetadataExchangeConfigFactory::createFilterFactory(
     const envoy::tcp::metadataexchange::config::MetadataExchange& proto_config,
     Server::Configuration::FactoryContext& context) {
-  return createFilterFactoryHelper(proto_config, context,
-                                   FilterDirection::Downstream);
+  return createFilterFactoryHelper(proto_config,
+                                   FilterDirection::Downstream, context);
 }
 
 Network::FilterFactoryCb
@@ -88,8 +82,8 @@ Network::FilterFactoryCb
 MetadataExchangeUpstreamConfigFactory::createFilterFactory(
     const envoy::tcp::metadataexchange::config::MetadataExchange& proto_config,
     Server::Configuration::CommonFactoryContext& context) {
-  return createFilterFactoryHelper(proto_config, context,
-                                   FilterDirection::Upstream);
+  return createFilterFactoryHelper(proto_config,
+                                   FilterDirection::Upstream, context);
 }
 
 /**

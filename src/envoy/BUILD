@@ -20,6 +20,7 @@ load(
     "envoy_cc_binary",
 )
 
+# TODO check if things still work & build is faster if remove all but my extension and main_entry_lib
 envoy_cc_binary(
     name = "envoy",
     repository = "@envoy",
@@ -36,7 +37,6 @@ envoy_cc_binary(
         "//src/envoy/tcp/metadata_exchange:config_lib",
         "//src/envoy/tcp/sni_verifier:config_lib",
         "//src/envoy/tcp/tcp_cluster_rewrite:config_lib",
-        "//src/envoy/tcp/wtf_agent:config_lib",
         "@envoy//source/exe:envoy_main_entry_lib",
     ],
 )
