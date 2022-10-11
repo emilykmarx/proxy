@@ -15,78 +15,49 @@
 
 #include "src/envoy/http/alpn/alpn_filter.h"
 
-#include "envoy/upstream/cluster_manager.h"
-#include "source/common/network/application_protocol.h"
-
 namespace Envoy {
 namespace Http {
 namespace Alpn {
 
+// TODO properly integrate this into proxy as a new filter.
+// Put it here for now bc I didn't want to figure out how to do that.
+// At least rename "metadata exchange" to the extent possible.
+// Also remove unused code
 AlpnFilterConfig::AlpnFilterConfig(
     const istio::envoy::config::filter::http::alpn::v2alpha1::FilterConfig
-        &proto_config,
+        &,
     Upstream::ClusterManager &cluster_manager)
     : cluster_manager_(cluster_manager) {
-  for (const auto &pair : proto_config.alpn_override()) {
-    std::vector<std::string> application_protocols;
-    for (const auto &protocol : pair.alpn_override()) {
-      application_protocols.push_back(protocol);
-    }
-
-    alpn_overrides_.insert({getHttpProtocol(pair.upstream_protocol()),
-                            std::move(application_protocols)});
-  }
 }
 
-Http::Protocol AlpnFilterConfig::getHttpProtocol(
-    const istio::envoy::config::filter::http::alpn::v2alpha1::FilterConfig::
-        Protocol &protocol) {
-  switch (protocol) {
-    case istio::envoy::config::filter::http::alpn::v2alpha1::FilterConfig::
-        Protocol::FilterConfig_Protocol_HTTP10:
-      return Http::Protocol::Http10;
-    case istio::envoy::config::filter::http::alpn::v2alpha1::FilterConfig::
-        Protocol::FilterConfig_Protocol_HTTP11:
-      return Http::Protocol::Http11;
-    case istio::envoy::config::filter::http::alpn::v2alpha1::FilterConfig::
-        Protocol::FilterConfig_Protocol_HTTP2:
-      return Http::Protocol::Http2;
-    default:
-      PANIC("not implemented");
-  }
+FilterHeadersStatus AlpnFilter::decodeHeaders(RequestHeaderMap &headers,
+                                                    bool end_stream) {
+  std::stringstream out;
+  headers.dumpState(out);
+  ENVOY_LOG(error, "decodeHeaders; headers: {}, end_stream {}", out.str(), end_stream);
+  return FilterHeadersStatus::Continue;
 }
 
-Http::FilterHeadersStatus AlpnFilter::decodeHeaders(Http::RequestHeaderMap &,
-                                                    bool) {
-  Router::RouteConstSharedPtr route = decoder_callbacks_->route();
-  const Router::RouteEntry *route_entry;
-  if (!route || !(route_entry = route->routeEntry())) {
-    ENVOY_LOG(debug, "cannot find route entry");
-    return Http::FilterHeadersStatus::Continue;
-  }
+FilterDataStatus AlpnFilter::decodeData(Buffer::Instance& data, bool end_stream) {
+  ENVOY_LOG(error, "decodeData; data: {}, end_stream {}", data.toString(), end_stream);
+  return FilterDataStatus::Continue;
+}
 
-  Upstream::ThreadLocalCluster *cluster =
-      config_->clusterManager().getThreadLocalCluster(
-          route_entry->clusterName());
-  if (!cluster || !cluster->info()) {
-    ENVOY_LOG(debug, "cannot find cluster {}", route_entry->clusterName());
-    return Http::FilterHeadersStatus::Continue;
-  }
+// TODO decoder cb have their own versions of encode*() -- why??
+FilterHeadersStatus AlpnFilter::encodeHeaders(ResponseHeaderMap& headers, bool end_stream) {
+  std::stringstream out;
+  headers.dumpState(out);
+  ENVOY_LOG(error, "encodeHeaders; headers: {}, end_stream {}", out.str(), end_stream);
+  return FilterHeadersStatus::Continue;
+}
 
-  auto protocols = cluster->info()->upstreamHttpProtocol(
-      decoder_callbacks_->streamInfo().protocol());
-  const auto &alpn_override = config_->alpnOverrides(protocols[0]);
+FilterDataStatus AlpnFilter::encodeData(Buffer::Instance& data, bool end_stream) {
+  ENVOY_LOG(error, "encodeData; data: {}, end_stream {}", data.toString(), end_stream);
+  return FilterDataStatus::Continue;
+}
 
-  if (!alpn_override.empty()) {
-    ENVOY_LOG(debug, "override with {} ALPNs", alpn_override.size());
-    decoder_callbacks_->streamInfo().filterState()->setData(
-        Network::ApplicationProtocols::key(),
-        std::make_unique<Network::ApplicationProtocols>(alpn_override),
-        Envoy::StreamInfo::FilterState::StateType::ReadOnly);
-  } else {
-    ENVOY_LOG(debug, "ALPN override is empty");
-  }
-  return Http::FilterHeadersStatus::Continue;
+void AlpnFilter::onDestroy() {
+  ENVOY_LOG(error, "onDestroy");
 }
 
 }  // namespace Alpn

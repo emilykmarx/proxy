@@ -24,7 +24,7 @@ using istio::envoy::config::filter::http::alpn::v2alpha1::FilterConfig;
 namespace Envoy {
 namespace Http {
 namespace Alpn {
-Http::FilterFactoryCb AlpnConfigFactory::createFilterFactoryFromProto(
+FilterFactoryCb AlpnConfigFactory::createFilterFactoryFromProto(
     const Protobuf::Message &config, const std::string &,
     Server::Configuration::FactoryContext &context) {
   return createFilterFactory(dynamic_cast<const FilterConfig &>(config),
@@ -39,14 +39,14 @@ std::string AlpnConfigFactory::name() const {
   return Utils::IstioFilterName::kAlpn;
 }
 
-Http::FilterFactoryCb AlpnConfigFactory::createFilterFactory(
+FilterFactoryCb AlpnConfigFactory::createFilterFactory(
     const FilterConfig &proto_config,
     Upstream::ClusterManager &cluster_manager) {
   AlpnFilterConfigSharedPtr filter_config{
       std::make_shared<AlpnFilterConfig>(proto_config, cluster_manager)};
-  return [filter_config](Http::FilterChainFactoryCallbacks &callbacks) -> void {
-    callbacks.addStreamDecoderFilter(
-        std::make_unique<AlpnFilter>(filter_config));
+  return [filter_config](FilterChainFactoryCallbacks &callbacks) -> void {
+    callbacks.addStreamFilter(
+        std::make_shared<AlpnFilter>(filter_config));
   };
 }
 

@@ -32,8 +32,7 @@ envoy_cc_library(
     deps = [
         "//external:alpn_filter_config_cc_proto",
         "@envoy//envoy/http:filter_interface",
-        "@envoy//source/common/network:application_protocol_lib",
-        "@envoy//source/extensions/filters/http/common:pass_through_filter_lib",
+        "@envoy//envoy/upstream:cluster_manager_interface",
     ],
 )
 
@@ -49,36 +48,5 @@ envoy_cc_library(
         "@envoy//envoy/registry",
         "@envoy//source/exe:envoy_common_lib",
         "@envoy//source/extensions/filters/http/common:factory_base_lib",
-    ],
-)
-
-envoy_cc_test(
-    name = "alpn_test",
-    srcs = [
-        "alpn_test.cc",
-    ],
-    repository = "@envoy",
-    deps = [
-        ":alpn_filter",
-        ":config_lib",
-        "@envoy//test/mocks/http:http_mocks",
-        "@envoy//test/mocks/local_info:local_info_mocks",
-        "@envoy//test/mocks/network:network_mocks",
-        "@envoy//test/mocks/protobuf:protobuf_mocks",
-        "@envoy//test/mocks/upstream:upstream_mocks",
-    ],
-)
-
-envoy_cc_test(
-    name = "config_test",
-    srcs = [
-        "config_test.cc",
-    ],
-    repository = "@envoy",
-    deps = [
-        ":alpn_filter",
-        ":config_lib",
-        "@envoy//test/mocks/server:server_mocks",
-        "@envoy//test/test_common:utility_lib",
     ],
 )
