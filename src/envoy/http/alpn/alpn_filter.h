@@ -18,6 +18,7 @@
 #include "envoy/config/filter/http/alpn/v2alpha1/config.pb.h"
 #include "envoy/upstream/cluster_manager.h"
 #include "envoy/http/filter.h"
+#include "envoy/access_log/access_log.h"
 
 namespace Envoy {
 namespace Http {
@@ -38,7 +39,8 @@ class AlpnFilterConfig {
 using AlpnFilterConfigSharedPtr = std::shared_ptr<AlpnFilterConfig>;
 
 class AlpnFilter : public StreamFilter,
-                   Logger::Loggable<Logger::Id::filter> {
+                   Logger::Loggable<Logger::Id::filter>,
+                   public AccessLog::Instance {
  public:
   explicit AlpnFilter(const AlpnFilterConfigSharedPtr &config)
       : config_(config) {}
@@ -58,12 +60,24 @@ class AlpnFilter : public StreamFilter,
   FilterHeadersStatus encode1xxHeaders(ResponseHeaderMap&) override {return FilterHeadersStatus::Continue;};
   FilterTrailersStatus encodeTrailers(ResponseTrailerMap&) override {return FilterTrailersStatus::Continue;};
   FilterMetadataStatus encodeMetadata(MetadataMap&) override {return FilterMetadataStatus::Continue;};
-  void setEncoderFilterCallbacks(StreamEncoderFilterCallbacks&) override {};
+  void setEncoderFilterCallbacks(StreamEncoderFilterCallbacks& callbacks) override {
+    encoder_callbacks_ = &callbacks;
+  };
   FilterTrailersStatus decodeTrailers(RequestTrailerMap&) override {return FilterTrailersStatus::Continue;};
-  void setDecoderFilterCallbacks(StreamDecoderFilterCallbacks&) override {};
+  void setDecoderFilterCallbacks(StreamDecoderFilterCallbacks& callbacks) override {
+    decoder_callbacks_ = &callbacks;
+  };
+
+  // AccessLog::Instance
+  void log(const RequestHeaderMap* request_headers,
+           const ResponseHeaderMap* response_headers,
+           const ResponseTrailerMap* response_trailers,
+           const StreamInfo::StreamInfo& stream_info) override;
 
  private:
   const AlpnFilterConfigSharedPtr config_;
+  Http::StreamDecoderFilterCallbacks* decoder_callbacks_{};
+  Http::StreamEncoderFilterCallbacks* encoder_callbacks_{};
 };
 
 }  // namespace Alpn

@@ -32,10 +32,44 @@ AlpnFilterConfig::AlpnFilterConfig(
 
 FilterHeadersStatus AlpnFilter::decodeHeaders(RequestHeaderMap &headers,
                                                     bool end_stream) {
-  std::stringstream out;
-  headers.dumpState(out);
-  ENVOY_LOG(error, "decodeHeaders; headers: {}, end_stream {}", out.str(), end_stream);
+  std::stringstream out_headers;
+  headers.dumpState(out_headers);
+  ENVOY_LOG(error, "decodeHeaders; headers: {}, end_stream {}", out_headers.str(), end_stream);
+  /* Note: Can't get the upstream host here, which makes sense since the lb hasn't run yet.
+   * decoder_callbacks_->streamInfo().upstreamInfo() is null here, and
+   * *_callbacks_->connection().remoteAddress()->asStringView() gives downstream conn */
+  /*
+  Notes on how to set the upstream host:
+  Upstream::HostDescriptionConstSharedPtr: given by upstreamHost()
+  Upstream::HostDescription& host;
+  absl::string_view host_address = host.address()->asStringView();
+  Should look like 172.17.0.6:9080
+  */
+
+  // Forces headers to the cluster containing .11 (usu reviews)
+  // to go to .11; everything else is routed as usual
+  // Will also need to do this in decodeData
+  decoder_callbacks_->setUpstreamOverrideHost("172.17.0.11:9080");
+
   return FilterHeadersStatus::Continue;
+}
+
+/*
+ * Called when the stream is destroyed.
+ */
+void AlpnFilter::log(const Http::RequestHeaderMap*, const Http::ResponseHeaderMap*,
+                 const Http::ResponseTrailerMap*, const StreamInfo::StreamInfo& stream_info) {
+  ENVOY_LOG(error, "log()");
+  if (stream_info.upstreamInfo().has_value()) {
+    Upstream::HostDescriptionConstSharedPtr host = stream_info.upstreamInfo()->upstreamHost();
+    if (host != nullptr) {
+      ENVOY_LOG(error, "host: {}", host->address()->asString());
+    } else {
+      ENVOY_LOG(error, "host was null");
+    }
+  } else {
+    ENVOY_LOG(error, "upstreamInfo was missing");
+  }
 }
 
 FilterDataStatus AlpnFilter::decodeData(Buffer::Instance& data, bool end_stream) {
@@ -43,12 +77,18 @@ FilterDataStatus AlpnFilter::decodeData(Buffer::Instance& data, bool end_stream)
   return FilterDataStatus::Continue;
 }
 
-// TODO decoder cb have their own versions of encode*() -- why??
 FilterHeadersStatus AlpnFilter::encodeHeaders(ResponseHeaderMap& headers, bool end_stream) {
   std::stringstream out;
   headers.dumpState(out);
   ENVOY_LOG(error, "encodeHeaders; headers: {}, end_stream {}", out.str(), end_stream);
-  return FilterHeadersStatus::Continue;
+  if (auto upstream_info = encoder_callbacks_->streamInfo().upstreamInfo();
+    upstream_info != nullptr) {
+    Upstream::HostDescriptionConstSharedPtr host = upstream_info->upstreamHost();
+    if (host != nullptr) {
+      ENVOY_LOG(error, "host: {}", host->address()->asString());
+    }
+  }
+return FilterHeadersStatus::Continue;
 }
 
 FilterDataStatus AlpnFilter::encodeData(Buffer::Instance& data, bool end_stream) {

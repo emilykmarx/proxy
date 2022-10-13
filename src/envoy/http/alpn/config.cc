@@ -45,8 +45,9 @@ FilterFactoryCb AlpnConfigFactory::createFilterFactory(
   AlpnFilterConfigSharedPtr filter_config{
       std::make_shared<AlpnFilterConfig>(proto_config, cluster_manager)};
   return [filter_config](FilterChainFactoryCallbacks &callbacks) -> void {
-    callbacks.addStreamFilter(
-        std::make_shared<AlpnFilter>(filter_config));
+    auto filter = std::make_shared<AlpnFilter>(filter_config);
+    callbacks.addStreamFilter(filter);
+    callbacks.addAccessLogHandler(filter);
   };
 }
 

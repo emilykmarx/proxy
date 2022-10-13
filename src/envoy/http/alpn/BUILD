@@ -33,6 +33,7 @@ envoy_cc_library(
         "//external:alpn_filter_config_cc_proto",
         "@envoy//envoy/http:filter_interface",
         "@envoy//envoy/upstream:cluster_manager_interface",
+        "@envoy//envoy/access_log:access_log_interface",
     ],
 )
 
