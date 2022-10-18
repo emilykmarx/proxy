@@ -14,11 +14,13 @@
  */
 
 #include "src/envoy/http/alpn/alpn_filter.h"
+#include "envoy/stats/scope.h"
 
 namespace Envoy {
 namespace Http {
 namespace Alpn {
 
+static constexpr char StatPrefix[] = "alpn.";
 // TODO properly integrate this into proxy as a new filter.
 // Put it here for now bc I didn't want to figure out how to do that.
 // At least rename "metadata exchange" to the extent possible.
@@ -26,8 +28,12 @@ namespace Alpn {
 AlpnFilterConfig::AlpnFilterConfig(
     const istio::envoy::config::filter::http::alpn::v2alpha1::FilterConfig
         &,
-    Upstream::ClusterManager &cluster_manager)
-    : cluster_manager_(cluster_manager) {
+    Upstream::ClusterManager &cluster_manager,
+    Stats::Scope& local_scope,
+    Stats::Scope& root_scope)
+    : cluster_manager_(cluster_manager), 
+      stats_(generateStats(StatPrefix, local_scope)),
+      root_scope_(root_scope) {
 }
 
 FilterHeadersStatus AlpnFilter::decodeHeaders(RequestHeaderMap &headers,
@@ -69,6 +75,17 @@ void AlpnFilter::log(const Http::RequestHeaderMap*, const Http::ResponseHeaderMa
     }
   } else {
     ENVOY_LOG(error, "upstreamInfo was missing");
+  }
+  
+  config_->stats_.on_log_.inc();
+  Stats::StatNameManagedStorage stat_name("alpn.on_log",
+                                          config_->root_scope_.symbolTable());
+  absl::optional<std::reference_wrapper<const Stats::Counter>> counter =
+    config_->root_scope_.findCounter(stat_name.statName());
+  if (!counter.has_value()) {
+    ENVOY_LOG(error, "ctr has no value");
+  } else {
+    ENVOY_LOG(error, "ctr val: {}", counter->get().value());
   }
 }
 

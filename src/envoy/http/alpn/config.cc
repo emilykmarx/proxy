@@ -28,8 +28,8 @@ FilterFactoryCb AlpnConfigFactory::createFilterFactoryFromProto(
     const Protobuf::Message &config, const std::string &,
     Server::Configuration::FactoryContext &context) {
   return createFilterFactory(dynamic_cast<const FilterConfig &>(config),
-                             context.clusterManager());
-}
+                             context.clusterManager(), context.scope(), context.api().rootScope());
+} 
 
 ProtobufTypes::MessagePtr AlpnConfigFactory::createEmptyConfigProto() {
   return ProtobufTypes::MessagePtr{new FilterConfig};
@@ -41,9 +41,9 @@ std::string AlpnConfigFactory::name() const {
 
 FilterFactoryCb AlpnConfigFactory::createFilterFactory(
     const FilterConfig &proto_config,
-    Upstream::ClusterManager &cluster_manager) {
+    Upstream::ClusterManager &cluster_manager, Stats::Scope& local_scope, Stats::Scope& root_scope) {
   AlpnFilterConfigSharedPtr filter_config{
-      std::make_shared<AlpnFilterConfig>(proto_config, cluster_manager)};
+      std::make_shared<AlpnFilterConfig>(proto_config, cluster_manager, local_scope, root_scope)};
   return [filter_config](FilterChainFactoryCallbacks &callbacks) -> void {
     auto filter = std::make_shared<AlpnFilter>(filter_config);
     callbacks.addStreamFilter(filter);
