@@ -1,37 +1,20 @@
-/* Copyright 2019 Istio Authors. All Rights Reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *    http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
 #include "src/envoy/http/alpn/alpn_filter.h"
-#include "envoy/stats/scope.h"
 
 namespace Envoy {
 namespace Http {
 namespace Alpn {
 
-static constexpr char StatPrefix[] = "alpn.";
 // TODO properly integrate this into proxy as a new filter.
 // Put it here for now bc I didn't want to figure out how to do that.
-// At least rename "metadata exchange" to the extent possible.
-// Also remove unused code
+// At least rename "alpn" to the extent possible.
+static constexpr char StatPrefix[] = "alpn.";
+
 AlpnFilterConfig::AlpnFilterConfig(
     const istio::envoy::config::filter::http::alpn::v2alpha1::FilterConfig
         &,
     Upstream::ClusterManager &cluster_manager,
-    Stats::Scope& local_scope,
-    Stats::Scope& root_scope)
-    : cluster_manager_(cluster_manager), 
+    Stats::Scope& local_scope, Stats::Scope& root_scope)
+    : cluster_manager_(cluster_manager),
       stats_(generateStats(StatPrefix, local_scope)),
       root_scope_(root_scope) {
 }
@@ -55,6 +38,7 @@ FilterHeadersStatus AlpnFilter::decodeHeaders(RequestHeaderMap &headers,
   // Forces headers to the cluster containing .11 (usu reviews)
   // to go to .11; everything else is routed as usual
   // Will also need to do this in decodeData
+  // TODO if overriden host doesn't exist anymore, send a message indicating that
   decoder_callbacks_->setUpstreamOverrideHost("172.17.0.11:9080");
 
   return FilterHeadersStatus::Continue;
@@ -64,7 +48,7 @@ FilterHeadersStatus AlpnFilter::decodeHeaders(RequestHeaderMap &headers,
  * Called when the stream is destroyed.
  */
 void AlpnFilter::log(const Http::RequestHeaderMap*, const Http::ResponseHeaderMap*,
-                 const Http::ResponseTrailerMap*, const StreamInfo::StreamInfo& stream_info) {
+                     const Http::ResponseTrailerMap*, const StreamInfo::StreamInfo& stream_info) {
   ENVOY_LOG(error, "log()");
   if (stream_info.upstreamInfo().has_value()) {
     Upstream::HostDescriptionConstSharedPtr host = stream_info.upstreamInfo()->upstreamHost();
@@ -76,21 +60,22 @@ void AlpnFilter::log(const Http::RequestHeaderMap*, const Http::ResponseHeaderMa
   } else {
     ENVOY_LOG(error, "upstreamInfo was missing");
   }
-  
-  config_->stats_.on_log_.inc();
-  Stats::StatNameManagedStorage stat_name("alpn.on_log",
+
+  // TODO periodically delete old stats
+  config_->stats_.msg_history_.insert(std::rand(), std::rand());
+  Stats::StatNameManagedStorage stat_name(std::string(StatPrefix) + "msg_history",
                                           config_->root_scope_.symbolTable());
-  absl::optional<std::reference_wrapper<const Stats::Counter>> counter =
-    config_->root_scope_.findCounter(stat_name.statName());
-  if (!counter.has_value()) {
-    ENVOY_LOG(error, "ctr has no value");
+  absl::optional<std::reference_wrapper<const Stats::Map>> msg_history =
+    config_->root_scope_.findMap(stat_name.statName());
+  if (!msg_history.has_value()) {
+    ENVOY_LOG(error, "msg_history has no value");
   } else {
-    ENVOY_LOG(error, "ctr val: {}", counter->get().value());
+    ENVOY_LOG(error, "msg_history val: {}", msg_history->get().value());
   }
 }
 
 FilterDataStatus AlpnFilter::decodeData(Buffer::Instance& data, bool end_stream) {
-  ENVOY_LOG(error, "decodeData; data: {}, end_stream {}", data.toString(), end_stream);
+  ENVOY_LOG(error, "decodeData; data: {}, end_stream {}", data.toString().substr(0,24), end_stream);
   return FilterDataStatus::Continue;
 }
 
@@ -109,7 +94,7 @@ return FilterHeadersStatus::Continue;
 }
 
 FilterDataStatus AlpnFilter::encodeData(Buffer::Instance& data, bool end_stream) {
-  ENVOY_LOG(error, "encodeData; data: {}, end_stream {}", data.toString(), end_stream);
+  ENVOY_LOG(error, "encodeData; data: {}, end_stream {}", data.toString().substr(0,24), end_stream);
   return FilterDataStatus::Continue;
 }
 

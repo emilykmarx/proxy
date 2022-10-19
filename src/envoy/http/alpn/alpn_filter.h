@@ -1,18 +1,3 @@
-/* Copyright 2019 Istio Authors. All Rights Reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *    http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
 #pragma once
 
 #include "envoy/config/filter/http/alpn/v2alpha1/config.pb.h"
@@ -29,38 +14,32 @@ namespace Alpn {
 /**
  * All alpn filter stats. @see stats_macros.h
  */
-#define ALL_ALPN_FILTER_STATS(COUNTER, GAUGE, HISTOGRAM)                                       \
-  COUNTER(on_log)                                                                                 
+#define ALL_ALPN_FILTER_STATS(MAP) \
+  MAP(msg_history)
 
 /**
  * Struct definition for all alpn filter stats. @see stats_macros.h
  */
 struct AlpnFilterStats {
-  ALL_ALPN_FILTER_STATS(GENERATE_COUNTER_STRUCT, GENERATE_GAUGE_STRUCT,
-                            GENERATE_HISTOGRAM_STRUCT)
+  ALL_ALPN_FILTER_STATS(GENERATE_MAP_STRUCT)
 };
+
 class AlpnFilterConfig : Logger::Loggable<Logger::Id::filter> {
  public:
   AlpnFilterConfig(
       const istio::envoy::config::filter::http::alpn::v2alpha1::FilterConfig
           &proto_config,
-      Upstream::ClusterManager &cluster_manager, 
+      Upstream::ClusterManager &cluster_manager,
       Stats::Scope& local_scope, Stats::Scope& root_scope);
 
-  Upstream::ClusterManager &clusterManager() { return cluster_manager_; }
-
-  // TODO make private w/ getters
   Upstream::ClusterManager &cluster_manager_;
-
   AlpnFilterStats stats_;
   Stats::Scope& root_scope_;
- 
+
  private:
   AlpnFilterStats generateStats(const std::string& prefix,
-                                      Stats::Scope& local_scope) {
-    return AlpnFilterStats{ALL_ALPN_FILTER_STATS(POOL_COUNTER_PREFIX(local_scope, prefix),
-                                                         POOL_GAUGE_PREFIX(local_scope, prefix),
-                                                         POOL_HISTOGRAM_PREFIX(local_scope, prefix))};
+                                Stats::Scope& local_scope) {
+    return AlpnFilterStats{ALL_ALPN_FILTER_STATS(POOL_MAP_PREFIX(local_scope, prefix))};
   }
 };
 
@@ -74,7 +53,7 @@ class AlpnFilter : public StreamFilter,
       : config_(config) {}
 
   FilterHeadersStatus decodeHeaders(RequestHeaderMap &headers,
-                                          bool end_stream) override;
+                                    bool end_stream) override;
 
   FilterDataStatus decodeData(Buffer::Instance& data, bool end_stream) override;
 
