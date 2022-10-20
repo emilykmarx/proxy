@@ -29,10 +29,10 @@ class AlpnFilterConfig : Logger::Loggable<Logger::Id::filter> {
   AlpnFilterConfig(
       const istio::envoy::config::filter::http::alpn::v2alpha1::FilterConfig
           &proto_config,
-      Upstream::ClusterManager &cluster_manager,
+      absl::string_view local_ip,
       Stats::Scope& local_scope, Stats::Scope& root_scope);
 
-  Upstream::ClusterManager &cluster_manager_;
+  absl::string_view local_ip_;
   AlpnFilterStats stats_;
   Stats::Scope& root_scope_;
 
