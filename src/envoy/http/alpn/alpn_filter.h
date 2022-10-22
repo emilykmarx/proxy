@@ -30,9 +30,11 @@ class AlpnFilterConfig : Logger::Loggable<Logger::Id::filter> {
       const istio::envoy::config::filter::http::alpn::v2alpha1::FilterConfig
           &proto_config,
       absl::string_view local_ip,
+      Upstream::ClusterManager &cluster_manager,
       Stats::Scope& local_scope, Stats::Scope& root_scope);
 
   absl::string_view local_ip_;
+  Upstream::ClusterManager &cluster_manager_;
   AlpnFilterStats stats_;
   Stats::Scope& root_scope_;
 
@@ -47,7 +49,8 @@ using AlpnFilterConfigSharedPtr = std::shared_ptr<AlpnFilterConfig>;
 
 class AlpnFilter : public StreamFilter,
                    Logger::Loggable<Logger::Id::filter>,
-                   public AccessLog::Instance {
+                   public AccessLog::Instance,
+                  public Http::AsyncClient::Callbacks {
  public:
   explicit AlpnFilter(const AlpnFilterConfigSharedPtr &config)
       : config_(config) {}
@@ -85,6 +88,17 @@ class AlpnFilter : public StreamFilter,
   const AlpnFilterConfigSharedPtr config_;
   Http::StreamDecoderFilterCallbacks* decoder_callbacks_{};
   Http::StreamEncoderFilterCallbacks* encoder_callbacks_{};
+
+  std::list<Http::AsyncClient::Request*> in_flight_requests_{};
+
+  // Http::AsyncClient::Callbacks
+  void onSuccess(const Http::AsyncClient::Request&, Http::ResponseMessagePtr&& response) override;
+  void onFailure(const Http::AsyncClient::Request&,
+                 Http::AsyncClient::FailureReason reason) override;
+  void onBeforeFinalizeUpstreamSpan(Envoy::Tracing::Span&,
+                                    const Http::ResponseHeaderMap*) override {};
+
+  bool sendHttpRequest(std::string orig_request_id, std::string host);
 };
 
 }  // namespace Alpn

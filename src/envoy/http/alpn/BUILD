@@ -19,6 +19,8 @@ envoy_cc_library(
         "@envoy//envoy/access_log:access_log_interface",
         "//extensions/common:context",
         "@envoy//envoy/stats:stats_macros",
+        "@envoy//source/common/http:headers_lib",
+        "@envoy//source/common/http:message_lib",
     ],
 )
 
