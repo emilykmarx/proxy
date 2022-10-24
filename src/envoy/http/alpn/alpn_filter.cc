@@ -48,13 +48,12 @@ void AlpnFilter::onFailure(const Http::AsyncClient::Request& request,
 
 bool AlpnFilter::sendHttpRequest(std::string orig_request_id, std::string host) {
     std::string cluster_name = host.substr(0, host.find(":"));
-    std::string ip = host.substr(host.find(":") + 1);
-    ENVOY_LOG(error, "sending trace to {}:{}", cluster_name, ip);
-    // TODO this doesn't result in lb setting override
+    std::string endpoint = host.substr(host.find(":") + 1);
+    ENVOY_LOG(error, "sending trace to {}:{}", cluster_name, endpoint);
     // TODO once this works, will need to prevent infinite loop of traces
-    // TODO: related -- for e.g. ratings, decodeHeaders for productPage is called twice, so sends trace twice.
+    // TODO: related -- for e.g. ratings, decodeHeaders for productPage is called twice
+    // (but not when the only request sent is from ratings to pp), so sends trace twice.
     // Prevent that with state or something.
-    decoder_callbacks_->setUpstreamOverrideHost(ip);
     /* Other option is to getOrCreateRawAsyncClient() like sip */
     // TODO rename method
     Http::RequestMessagePtr request(new Http::RequestMessageImpl());
@@ -67,7 +66,8 @@ bool AlpnFilter::sendHttpRequest(std::string orig_request_id, std::string host) 
     if (thread_local_cluster != nullptr) {
       in_flight_request = thread_local_cluster->httpAsyncClient().send(
           std::move(request), *this,
-          Http::AsyncClient::RequestOptions().setTimeout(std::chrono::milliseconds(5000)));
+          Http::AsyncClient::RequestOptions().setTimeout(std::chrono::milliseconds(5000)),
+          endpoint);
     } else {
       ENVOY_LOG(error, "sendHttpRequest: Unknown cluster name: {}", cluster_name);
       return false;
@@ -97,6 +97,12 @@ FilterHeadersStatus AlpnFilter::decodeHeaders(RequestHeaderMap &headers,
     return FilterHeadersStatus::Continue;
   }
 
+  // TEST ONLY: log and drop trace
+  ENVOY_LOG(error, "recvd trace");
+  decoder_callbacks_->resetStream();
+  return FilterHeadersStatus::StopIteration;
+
+  // NON-TEST
   // Handle trace request.
   // NOTE: Any errors here should reset the stream and stop iteration.
   if (wtf_trace_hdr.size() > 1) {
@@ -149,6 +155,7 @@ FilterHeadersStatus AlpnFilter::decodeHeaders(RequestHeaderMap &headers,
  * Called when the stream is destroyed.
  * Stream is a request and corresponding response, where this filter either
  * sent or received the request.
+ * When request is sent via httpAsyncClient(), called in receiver but not sender.
  */
 // TODO audit for null check before every ->
 void AlpnFilter::log(const Http::RequestHeaderMap* req_hdrs, const Http::ResponseHeaderMap* resp_hdrs,
@@ -207,6 +214,7 @@ void AlpnFilter::log(const Http::RequestHeaderMap* req_hdrs, const Http::Respons
     ENVOY_LOG(error, "Upstream host cluster or IP empty in stream with x-request-id {}", x_request_id);
     return;
   }
+
   // 2. Record upstream host to which we sent the request
   // TODO periodically delete old stats
   // EASYTODO make map value a pair rather than cluster_name:IP (incl port)
@@ -248,6 +256,26 @@ FilterHeadersStatus AlpnFilter::encodeHeaders(ResponseHeaderMap& headers, bool e
  */
 FilterDataStatus AlpnFilter::encodeData(Buffer::Instance& data, bool end_stream) {
   ENVOY_LOG(error, "encodeData; data: {}, end_stream {}", data.toString().substr(0,24), end_stream);
+  // TEST ONLY: on sending regular request to reviews, productpage also sends a bunch of traces to reviews (and details).
+  // Confirmed they all go to the same pod as the request (but are sprayed across all 3 pods without passing endpoint to send()).
+  // No other pods send traces (to avoid infinite loop).
+  Stats::StatNameManagedStorage stat_name(std::string(StatPrefix) + "msg_history",
+                                          config_->root_scope_.symbolTable());
+  absl::optional<std::reference_wrapper<const Stats::Map>> msg_history_wrapper =
+    config_->root_scope_.findMap(stat_name.statName());
+
+  auto msg_history = msg_history_wrapper->get().value();
+  auto history_entry = msg_history.begin();
+  if (!msg_history.empty() && history_entry->second.size() == 2 && data.toString().length() == 0) {
+    ENVOY_LOG(error, "productpage sending traces to reviews");
+    for (int i = 0; i < 10; i++) {
+      for (auto host : history_entry->second) {
+        sendHttpRequest(history_entry->first, host);
+      }
+    }
+    return FilterDataStatus::StopIterationNoBuffer;
+  }
+
   return FilterDataStatus::Continue;
 }
 
