@@ -46,20 +46,15 @@ void AlpnFilter::onFailure(const Http::AsyncClient::Request& request,
   }
 }
 
-bool AlpnFilter::sendHttpRequest(std::string orig_request_id, std::string host) {
+bool AlpnFilter::sendHttpRequest(std::string& orig_request_id, const Stats::Map::MsgHistory::RequestSent& request_sent) {
+    std::string host = request_sent.endpoint;
     std::string cluster_name = host.substr(0, host.find(":"));
     std::string endpoint = host.substr(host.find(":") + 1);
     ENVOY_LOG(error, "sending trace to {}:{}", cluster_name, endpoint);
-    // TODO once this works, will need to prevent infinite loop of traces
-    // TODO: related -- for e.g. ratings, decodeHeaders for productPage is called twice
-    // (but not when the only request sent is from ratings to pp), so sends trace twice.
-    // Prevent that with state or something.
-    /* Other option is to getOrCreateRawAsyncClient() like sip */
     // TODO rename method
-    Http::RequestMessagePtr request(new Http::RequestMessageImpl());
-    request->headers().setPath("/wtf-trace");
-    request->headers().setMethod(Http::Headers::get().MethodValues.Get);
-    request->headers().setHost("wtf-trace");
+    // Message constructor move()s the headers, but we want to keep them in the map
+    Http::RequestMessagePtr request(new Http::RequestMessageImpl(
+        Http::createHeaderMap<Http::RequestHeaderMapImpl>(*request_sent.headers)));
     request->headers().addCopy(WTFTraceHeader, orig_request_id);
     const auto thread_local_cluster = config_->cluster_manager_.getThreadLocalCluster(cluster_name);
     Http::AsyncClient::Request* in_flight_request;
@@ -97,49 +92,43 @@ FilterHeadersStatus AlpnFilter::decodeHeaders(RequestHeaderMap &headers,
     return FilterHeadersStatus::Continue;
   }
 
-  // TEST ONLY: log and drop trace
   ENVOY_LOG(error, "recvd trace");
-  decoder_callbacks_->resetStream();
-  return FilterHeadersStatus::StopIteration;
 
-  // NON-TEST
   // Handle trace request.
-  // NOTE: Any errors here should reset the stream and stop iteration.
+  // NOTE: Any early returns here should reset the stream and stop iteration.
   if (wtf_trace_hdr.size() > 1) {
     ENVOY_LOG(error, "Multiple WTF trace headers in trace request; dropping");
     decoder_callbacks_->resetStream();
     return FilterHeadersStatus::StopIteration;
   }
 
-  Stats::StatNameManagedStorage stat_name(std::string(StatPrefix) + "msg_history",
-                                          config_->root_scope_.symbolTable());
-  absl::optional<std::reference_wrapper<const Stats::Map>> msg_history_wrapper =
-    config_->root_scope_.findMap(stat_name.statName());
   std::string orig_request_id = std::string(wtf_trace_hdr[0]->value().getStringView());
-  if (!msg_history_wrapper.has_value()) {
-    // Very bad -- message history data structure doesn't even exist
-    ENVOY_LOG(critical, "Global message history not found while handling trace for request ID {}",
-              orig_request_id);
-    decoder_callbacks_->resetStream();
-    return FilterHeadersStatus::StopIteration;
-  }
 
-  // PERF could be better to expose a find() from Stats::Map than use value()
-  auto msg_history = msg_history_wrapper->get().value();
-  auto found_msg_history = msg_history.find(orig_request_id);
-  if (found_msg_history == msg_history.end()) {
+  const Stats::Map::MsgHistory* msg_history =
+      config_->stats_.msg_history_.getMsgHistory(orig_request_id);
+  if (!msg_history) {
     // Original request may be too old to trace, or this pod didn't send any requests
     // as part of original request (TODO should differentiate those two --
     // handling response path may take care of it)
+
+    // TODO if no history, send to app; make sure resulting outgoing requests are marked trace (see if works for bookinfo)
     ENVOY_LOG(error, "Message history missing for request ID: {}", orig_request_id);
     decoder_callbacks_->resetStream();
     return FilterHeadersStatus::StopIteration;
   }
 
+  /** If haven't yet: Send trace to all recorded neighbors simultaneously. */
   bool sent_a_request = false;
-  for (std::string host : found_msg_history->second) {
-    if (sendHttpRequest(found_msg_history->first, host)) {
-      sent_a_request = true;
+  if (!msg_history->handled) {
+    for (const Stats::Map::MsgHistory::RequestSent& request_sent : msg_history->requests_sent) {
+      if (sendHttpRequest(orig_request_id, request_sent)) {
+        sent_a_request = true;
+      }
+    }
+
+    if (!config_->stats_.msg_history_.setHandled(orig_request_id)) {
+      ENVOY_LOG(error, "Failed to record trace as handled for original request ID {}",
+                orig_request_id);
     }
   }
 
@@ -220,7 +209,7 @@ void AlpnFilter::log(const Http::RequestHeaderMap* req_hdrs, const Http::Respons
   // EASYTODO make map value a pair rather than cluster_name:IP (incl port)
   // absl::string_view does not like to concatenate
   std::string upstream_host = upstream_host_cluster + ":" + upstream_host_ip;
-  config_->stats_.msg_history_.insert(x_request_id, upstream_host);
+  config_->stats_.msg_history_.insert(x_request_id, upstream_host, req_hdrs);
 }
 
 /**
@@ -256,26 +245,6 @@ FilterHeadersStatus AlpnFilter::encodeHeaders(ResponseHeaderMap& headers, bool e
  */
 FilterDataStatus AlpnFilter::encodeData(Buffer::Instance& data, bool end_stream) {
   ENVOY_LOG(error, "encodeData; data: {}, end_stream {}", data.toString().substr(0,24), end_stream);
-  // TEST ONLY: on sending regular request to reviews, productpage also sends a bunch of traces to reviews (and details).
-  // Confirmed they all go to the same pod as the request (but are sprayed across all 3 pods without passing endpoint to send()).
-  // No other pods send traces (to avoid infinite loop).
-  Stats::StatNameManagedStorage stat_name(std::string(StatPrefix) + "msg_history",
-                                          config_->root_scope_.symbolTable());
-  absl::optional<std::reference_wrapper<const Stats::Map>> msg_history_wrapper =
-    config_->root_scope_.findMap(stat_name.statName());
-
-  auto msg_history = msg_history_wrapper->get().value();
-  auto history_entry = msg_history.begin();
-  if (!msg_history.empty() && history_entry->second.size() == 2 && data.toString().length() == 0) {
-    ENVOY_LOG(error, "productpage sending traces to reviews");
-    for (int i = 0; i < 10; i++) {
-      for (auto host : history_entry->second) {
-        sendHttpRequest(history_entry->first, host);
-      }
-    }
-    return FilterDataStatus::StopIterationNoBuffer;
-  }
-
   return FilterDataStatus::Continue;
 }
 
