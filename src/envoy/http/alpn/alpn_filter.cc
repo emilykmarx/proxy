@@ -6,14 +6,17 @@ namespace Envoy {
 namespace Http {
 namespace Alpn {
 
-// TODO properly integrate this into proxy as a new filter.
+/**
+ * Cleanup TODOs:
+ * - remove/downgrade debug logging
+// - properly integrate this into proxy as a new filter.
 // Put it here for now bc I didn't want to figure out how to do that.
 // At least rename "alpn" to the extent possible.
+// - audit for null check before every ->
+*/
 static constexpr char StatPrefix[] = "alpn.";
-/* Header value should be request ID to trace */
-const Http::LowerCaseString WTFTraceHeader{"x-wtf-trace"};
 /** Prefix of request ID identifying a trace.
- *  Next token is seqno, rest is original request ID. */
+ *  Rest is original request ID. */
 const std::string TraceRequestIdPrefix = "WTFTRACE";
 
 AlpnFilterConfig::AlpnFilterConfig(
@@ -49,7 +52,7 @@ void AlpnFilter::onFailure(const Http::AsyncClient::Request& request,
   }
 }
 
-bool AlpnFilter::sendHttpRequest(std::string& orig_request_id, const Stats::Map::MsgHistory::RequestSent& request_sent) {
+bool AlpnFilter::sendHttpRequest(absl::string_view orig_request_id, const Stats::Map::MsgHistory::RequestSent& request_sent) {
     std::string host = request_sent.endpoint;
     std::string cluster_name = host.substr(0, host.find(":"));
     std::string endpoint = host.substr(host.find(":") + 1);
@@ -58,7 +61,7 @@ bool AlpnFilter::sendHttpRequest(std::string& orig_request_id, const Stats::Map:
     // Message constructor move()s the headers, but we want to keep them in the map
     Http::RequestMessagePtr request(new Http::RequestMessageImpl(
         Http::createHeaderMap<Http::RequestHeaderMapImpl>(*request_sent.headers)));
-    request->headers().setRequestId(TraceRequestIdPrefix + "-" + orig_request_id);
+    request->headers().setRequestId(TraceRequestIdPrefix + "-" + std::string(orig_request_id));
     const auto thread_local_cluster = config_->cluster_manager_.getThreadLocalCluster(cluster_name);
     Http::AsyncClient::Request* in_flight_request;
     if (thread_local_cluster != nullptr) {
@@ -80,6 +83,17 @@ bool AlpnFilter::sendHttpRequest(std::string& orig_request_id, const Stats::Map:
   return true;
 }
 
+// request_id should be non-empty. Return empty if not a trace.
+absl::string_view stripTracePrefix(absl::string_view request_id) {
+
+  std::vector<absl::string_view> request_id_tokens = absl::StrSplit(request_id,
+                                                                    absl::MaxSplits('-', 1));
+  if (request_id_tokens.front() == TraceRequestIdPrefix) {
+    return request_id_tokens.back();
+  }
+  return {}; // not a trace
+}
+
 /**
  * Called when request headers are sent or received.
  * end_stream is true if request has been fully sent or received.
@@ -91,61 +105,42 @@ FilterHeadersStatus AlpnFilter::decodeHeaders(RequestHeaderMap &headers,
   headers.dumpState(out_headers);
   ENVOY_LOG(error, "");
   ENVOY_LOG(error, "decodeHeaders; headers: {}, end_stream {}", out_headers.str(), end_stream);
-  std::vector<absl::string_view> request_id_tokens = absl::StrSplit(headers.getRequestIdValue(),
-                                                                    absl::MaxSplits('-', 1));
-  if (request_id_tokens.empty()) {
+
+  absl::string_view x_request_id = headers.getRequestIdValue();
+  if (x_request_id.empty()) {
     ENVOY_LOG(error, "Request missing request ID in decodeHeaders()");
     return FilterHeadersStatus::Continue;
   }
-  if (request_id_tokens.front() != TraceRequestIdPrefix) {
+  absl::string_view orig_request_id = stripTracePrefix(x_request_id);
+  if (orig_request_id.empty()) {
     ENVOY_LOG(error, "normal request");
     // Normal request => let it through
     return FilterHeadersStatus::Continue;
   }
 
-  // Handle trace request. LEFT OFF think thru what happens if: 1) From curl 2) From another pod 3) Coming down from app bc no history
-    // (and leave comment as reminder these are the 3 cases)
+  /** Handle trace request. May be: 1) From local curl 2) From another pod 3) Coming down from app bc no history
+   *  NOTE: Any errors here should reset the stream and stop iteration.
+   *  NOTE: Keep in mind threads may be running decodeHeaders for same request ID concurrently,
+   *  sharing the msg history stat. Since we release the lock to handle the trace,
+   *  it's possible two threads will handle the same trace, or one will handle it while a normal
+   *  request is being handled on another. But the worst that should happen as a result is
+   *  sending a dup trace, or handling a trace with incomplete request history
+   *  (seems hard to guarantee avoiding that anyway). */
 
-  // NOTE: Any errors here should reset the stream and stop iteration.
-  /** NOTE: Keep in mind threads may be running decodeHeaders for same request ID concurrently,
-   * sharing the msg history stat.
-   * Also, if those are for both non-trace and trace msgs (i.e. start a trace while still handling orig request),
-   * need to think through what would happen */
-
-  std::string orig_request_id = std::string(request_id_tokens.back());
-
-  // TODO think thru thread interleaving
-  auto downstream_local = decoder_callbacks_->streamInfo().downstreamAddressProvider().localAddress()->asStringView();
-  auto downstream_remote = decoder_callbacks_->streamInfo().downstreamAddressProvider().remoteAddress()->asStringView();
-  auto downstream_from_conn = decoder_callbacks_->connection()->connectionInfoProvider().remoteAddress()->asStringView();
-  // TODO check if this is any different
-  ENVOY_LOG(error, "downstream local {}, remote {}, remote from conn {}", downstream_local, downstream_remote, downstream_from_conn);
-  ENVOY_LOG(error, "recvd trace; req ID {}", request_id_tokens.back());
-  absl::string_view trace_sender_ip =
-      decoder_callbacks_->streamInfo().downstreamAddressProvider().remoteAddress()->ip()->addressAsString();
+  ENVOY_LOG(error, "recvd trace; orig req ID {}", orig_request_id);
   const Stats::Map::MsgHistory* msg_history =
       config_->stats_.msg_history_.getMsgHistory(orig_request_id);
 
-  // EASYTODO rename MsgHistory, msg_history, msg_history_ to "request_id_history (since has trace & request)"
-  if (!msg_history || msg_history->missing_request_history) {
+  // EASYTODO rename MsgHistory, msg_history, msg_history_ to "request_id_history"
+  if (!msg_history) {
     /** Request history was lost, or never existed =>
-     *  send to app if incoming, or to destination service if outgoing;
-     *  record *this message* as handled (not the e2e request - need to handle each message involved) */
-    bool inserted = config_->stats_.msg_history_.insert_trace_recvd(orig_request_id, trace_sender_ip, &headers);
-    if (inserted) {
-      ENVOY_LOG(error, "Received trace without request history; sending upstream");
-      return FilterHeadersStatus::Continue;
-    } else {
-      // Previously sent this trace request upstream (duplicate) => drop
-      // TODO make sure test all these cases
-      ENVOY_LOG(error, "Trace w/o request history was dup", orig_request_id);
-      decoder_callbacks_->resetStream();
-      return FilterHeadersStatus::StopIteration;
-    }
+     *  send to app if incoming, or to destination service if outgoing */
+    ENVOY_LOG(error, "Received trace without request history; sending upstream");
+    return FilterHeadersStatus::Continue;
   }
 
-  /** Send trace to all recorded neighbors simultaneously and mark handled,
-   *  if haven't yet (note each original request ID can only be traced once
+  /** Send all recorded requests (to their original nbrs, with original hdrs)
+   *  simultaneously and mark handled, if haven't yet (note each original request ID can only be traced once
    *  over the lifetime of a proxy -- likely easy to change by adding a "trace ID"). */
   bool sent_a_request = false;
   if (!msg_history->handled) {
@@ -178,7 +173,6 @@ FilterHeadersStatus AlpnFilter::decodeHeaders(RequestHeaderMap &headers,
  * sent or received the request.
  * When request is sent via httpAsyncClient(), called in receiver but not sender.
  */
-// TODO audit for null check before every ->
 void AlpnFilter::log(const Http::RequestHeaderMap* req_hdrs, const Http::ResponseHeaderMap* resp_hdrs,
                      const Http::ResponseTrailerMap*, const StreamInfo::StreamInfo& stream_info) {
   ENVOY_LOG(error, "log()");
@@ -196,15 +190,15 @@ void AlpnFilter::log(const Http::RequestHeaderMap* req_hdrs, const Http::Respons
     return;
   }
 
-  Envoy::Http::HeaderMap::GetResult wtf_trace_hdr = req_hdrs->get(WTFTraceHeader);
-  if (!wtf_trace_hdr.empty()) {
-    // Stream was a trace request => no need to record anything
-    return;
-  }
-
   absl::string_view x_request_id = req_hdrs->getRequestIdValue();
   if (x_request_id.empty()) {
     ENVOY_LOG(error, "x-request-id missing in stream");
+    return;
+  }
+
+  if (!stripTracePrefix(x_request_id).empty()) {
+    // Stream was a trace request => no need to record anything
+    ENVOY_LOG(error, "log: skipping recording trace");
     return;
   }
 

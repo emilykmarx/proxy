@@ -98,7 +98,7 @@ class AlpnFilter : public StreamFilter,
   void onBeforeFinalizeUpstreamSpan(Envoy::Tracing::Span&,
                                     const Http::ResponseHeaderMap*) override {};
 
-  bool sendHttpRequest(std::string& orig_request_id, const Stats::Map::MsgHistory::RequestSent& request_sent);
+  bool sendHttpRequest(absl::string_view orig_request_id, const Stats::Map::MsgHistory::RequestSent& request_sent);
 };
 
 }  // namespace Alpn
