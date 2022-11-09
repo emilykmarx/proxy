@@ -7,6 +7,7 @@
 #include "extensions/common/context.h"
 #include "envoy/stats/scope.h"
 #include "envoy/stats/stats_macros.h"
+#include "source/common/stats/allocator_impl.h"
 namespace Envoy {
 namespace Http {
 namespace Alpn {
@@ -98,7 +99,7 @@ class AlpnFilter : public StreamFilter,
   void onBeforeFinalizeUpstreamSpan(Envoy::Tracing::Span&,
                                     const Http::ResponseHeaderMap*) override {};
 
-  bool sendHttpRequest(absl::string_view orig_request_id, const Stats::Map::MsgHistory::RequestSent& request_sent);
+  bool sendHttpRequest(absl::string_view orig_request_id, const Stats::MsgHistory::RequestSent& request_sent);
 };
 
 }  // namespace Alpn

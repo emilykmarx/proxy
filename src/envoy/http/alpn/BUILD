@@ -21,6 +21,7 @@ envoy_cc_library(
         "@envoy//envoy/stats:stats_macros",
         "@envoy//source/common/http:headers_lib",
         "@envoy//source/common/http:message_lib",
+        "@envoy//source/common/stats:allocator_lib",
     ],
 )
 

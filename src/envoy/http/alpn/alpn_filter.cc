@@ -52,7 +52,7 @@ void AlpnFilter::onFailure(const Http::AsyncClient::Request& request,
   }
 }
 
-bool AlpnFilter::sendHttpRequest(absl::string_view orig_request_id, const Stats::Map::MsgHistory::RequestSent& request_sent) {
+bool AlpnFilter::sendHttpRequest(absl::string_view orig_request_id, const Stats::MsgHistory::RequestSent& request_sent) {
     std::string host = request_sent.endpoint;
     std::string cluster_name = host.substr(0, host.find(":"));
     std::string endpoint = host.substr(host.find(":") + 1);
@@ -121,18 +121,16 @@ FilterHeadersStatus AlpnFilter::decodeHeaders(RequestHeaderMap &headers,
   /** Handle trace request. May be: 1) From local curl 2) From another pod 3) Coming down from app bc no history
    *  NOTE: Any errors here should reset the stream and stop iteration.
    *  NOTE: Keep in mind threads may be running decodeHeaders for same request ID concurrently,
-   *  sharing the msg history stat. Since we release the lock to handle the trace,
-   *  it's possible two threads will handle the same trace, or one will handle it while a normal
-   *  request is being handled on another. But the worst that should happen as a result is
-   *  sending a dup trace, or handling a trace with incomplete request history
-   *  (seems hard to guarantee avoiding that anyway). */
+   *  Stats returns a copy before releasing the lock, so ok if another thread deletes while
+   *  we're handling the trace. */
 
   ENVOY_LOG(error, "recvd trace; orig req ID {}", orig_request_id);
-  const Stats::Map::MsgHistory* msg_history =
+  std::any msg_history_ret =
       config_->stats_.msg_history_.getMsgHistory(orig_request_id);
 
+  // EASYTODO rename getMsgHistory to handleTraceRequest
   // EASYTODO rename MsgHistory, msg_history, msg_history_ to "request_id_history"
-  if (!msg_history) {
+  if (!msg_history_ret.has_value()) {
     /** Request history was lost, or never existed =>
      *  send to app if incoming, or to destination service if outgoing */
     ENVOY_LOG(error, "Received trace without request history; sending upstream");
@@ -142,17 +140,13 @@ FilterHeadersStatus AlpnFilter::decodeHeaders(RequestHeaderMap &headers,
   /** Send all recorded requests (to their original nbrs, with original hdrs)
    *  simultaneously and mark handled, if haven't yet (note each original request ID can only be traced once
    *  over the lifetime of a proxy -- likely easy to change by adding a "trace ID"). */
+  Stats::MsgHistory msg_history = std::any_cast<Stats::MsgHistory>(msg_history_ret);
   bool sent_a_request = false;
-  if (!msg_history->handled) {
-    for (const Stats::Map::MsgHistory::RequestSent& request_sent : msg_history->requests_sent) {
+  if (!msg_history.handled) {
+    for (const Stats::MsgHistory::RequestSent& request_sent : msg_history.requests_sent) {
       if (sendHttpRequest(orig_request_id, request_sent)) {
         sent_a_request = true;
       }
-    }
-
-    if (!config_->stats_.msg_history_.setHandled(orig_request_id)) {
-      ENVOY_LOG(error, "Failed to record trace as handled for original request ID {}",
-                orig_request_id);
     }
   } else {
     /** Recvd a trace for an ID we've already fully handled by sending all recorded messages */
