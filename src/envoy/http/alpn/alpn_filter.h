@@ -99,7 +99,14 @@ class AlpnFilter : public StreamFilter,
   void onBeforeFinalizeUpstreamSpan(Envoy::Tracing::Span&,
                                     const Http::ResponseHeaderMap*) override {};
 
-  bool sendHttpRequest(absl::string_view orig_request_id, const Stats::MsgHistory::RequestSent& request_sent);
+  bool sendHttpRequest(const Stats::MsgHistory::RequestSent& request_sent,
+                       absl::string_view orig_request_id = absl::string_view());
+  /** If set, a trace this filter has sent without history. We'll spray it to the
+   *  rest of the cluster upon receiving the response. */
+  absl::optional<Stats::MsgHistory::RequestSent> trace_to_spray{};
+
+  // TODO remove
+  int whoami{std::rand()};
 };
 
 }  // namespace Alpn
