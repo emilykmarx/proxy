@@ -8,7 +8,9 @@ spec:
   configPatches:
   - applyTo: HTTP_FILTER
     match:
-      context: ANY
+      # Seems to give the same result as ANY, except ANY causes 2 filter instances to be created
+      # when a request is sent (but both instances have the same streamId.)
+      context: SIDECAR_INBOUND
       listener:
         filterChain:
           filter:
