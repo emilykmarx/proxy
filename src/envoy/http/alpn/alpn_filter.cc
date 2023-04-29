@@ -16,7 +16,8 @@ namespace Alpn {
 */
 static constexpr char StatPrefix[] = "alpn.";
 /** Prefix of request ID identifying a trace.
- *  Rest is original request ID. */
+ *  Rest is original request ID.
+ *  (Also used as a hack to tag wtf messages logged at error level that are really info) */
 const std::string TraceRequestIdPrefix = "WTFTRACE";
 
 AlpnFilterConfig::AlpnFilterConfig(
@@ -36,7 +37,7 @@ AlpnFilterConfig::AlpnFilterConfig(
 
 void AlpnFilter::onSuccess(const Http::AsyncClient::Request& request,
                            Http::ResponseMessagePtr&&) {
-  ENVOY_LOG(error, "onSuccess");
+  ENVOY_LOG(trace, "onSuccess");
   in_flight_requests_.remove(const_cast<Http::AsyncClient::Request *> (&request));
   if (in_flight_requests_.empty()) {
     decoder_callbacks_->resetStream();
@@ -44,8 +45,7 @@ void AlpnFilter::onSuccess(const Http::AsyncClient::Request& request,
 }
 void AlpnFilter::onFailure(const Http::AsyncClient::Request& request,
                            Http::AsyncClient::FailureReason) {
-  // TODO do something here
-  ENVOY_LOG(error, "onFailure");
+  ENVOY_LOG(error, "HTTP request failed to send");
   in_flight_requests_.remove(const_cast<Http::AsyncClient::Request *> (&request));
   if (in_flight_requests_.empty()) {
     decoder_callbacks_->resetStream();
@@ -59,7 +59,7 @@ bool AlpnFilter::sendHttpRequest(const Stats::MsgHistory::RequestSent& request_s
     std::string host = request_sent.endpoint;
     std::string cluster_name = host.substr(0, host.find(":"));
     std::string endpoint = host.substr(host.find(":") + 1);
-    ENVOY_LOG(error, "sending trace to {}:{}", cluster_name, endpoint);
+    ENVOY_LOG(trace, "sending trace to {}:{}", cluster_name, endpoint);
     // TODO rename method
     // Message constructor move()s the headers, but we want to keep them in the map
     Http::RequestMessagePtr request(new Http::RequestMessageImpl(
@@ -109,24 +109,17 @@ FilterHeadersStatus AlpnFilter::decodeHeaders(RequestHeaderMap &headers,
                                               bool end_stream) {
   std::stringstream out_headers;
   headers.dumpState(out_headers);
-  ENVOY_LOG(error, "");
-  ENVOY_LOG(error, "decodeHeaders; headers: {}, end_stream {}, whoami {}", out_headers.str(), end_stream, whoami);
-  auto ds_local = decoder_callbacks_->streamInfo().downstreamAddressProvider().localAddress()->asStringView();
-  auto ds_remote = decoder_callbacks_->streamInfo().downstreamAddressProvider().remoteAddress()->asStringView();
-  if (decoder_callbacks_->streamInfo().upstreamInfo()) {
-    ENVOY_LOG(error, "has upstream info");
-  }
-  ENVOY_LOG(error, "ds_local {}, remote {}", ds_local, ds_remote);
-  ENVOY_LOG(error, "streamid: {}", decoder_callbacks_->streamId());
+  ENVOY_LOG(trace, "");
+  ENVOY_LOG(trace, "decodeHeaders; headers: {}, end_stream {}, whoami {}", out_headers.str(), end_stream, whoami);
 
   absl::string_view x_request_id = headers.getRequestIdValue();
   if (x_request_id.empty()) {
-    ENVOY_LOG(error, "Request missing request ID in decodeHeaders()");
+    ENVOY_LOG(warn, "Non-trace request missing request ID in decodeHeaders(); won't be able to record history");
     return FilterHeadersStatus::Continue;
   }
   absl::string_view orig_request_id = stripTracePrefix(x_request_id);
   if (orig_request_id.empty()) {
-    ENVOY_LOG(error, "normal request");
+    ENVOY_LOG(trace, "normal request");
     // Normal request => let it through
     return FilterHeadersStatus::Continue;
   }
@@ -137,7 +130,13 @@ FilterHeadersStatus AlpnFilter::decodeHeaders(RequestHeaderMap &headers,
    *  Stats returns a copy before releasing the lock, so ok if another thread deletes while
    *  we're handling the trace. */
 
-  ENVOY_LOG(error, "recvd trace; orig req ID {}", orig_request_id);
+  std::string sender_ip = decoder_callbacks_->streamInfo().downstreamAddressProvider().remoteAddress()->ip()->addressAsString();
+  absl::string_view sender_endpoint = decoder_callbacks_->streamInfo().downstreamAddressProvider().remoteAddress()->asStringView();
+
+  // Haven't found a way to get downstream cluster name here (not virtualClusterName, not upstreamClusterInfo (from either decoder or encoder cb),
+  // not downstreamAddressProvider)
+  ENVOY_LOG(error, "[{}] Received WTF trace\nOriginal request ID: {}\nDownstream endpoint: {}",
+            TraceRequestIdPrefix, orig_request_id, sender_endpoint);
   std::any msg_history_ret =
       config_->stats_.msg_history_.getMsgHistory(orig_request_id);
 
@@ -148,12 +147,13 @@ FilterHeadersStatus AlpnFilter::decodeHeaders(RequestHeaderMap &headers,
      *  If outgoing (from app): Let it through, and we'll spray it across the rest of the destination service cluster
      *  upon receiving response (would spray now, but don't know dest cluster yet).
      *  If incoming: Send to app; app will generate any follow-on requests, which another filter will spray on outgoing path. */
-    ENVOY_LOG(error, "Received trace without request history; sending upstream");
-    std::string sender_ip = decoder_callbacks_->streamInfo().downstreamAddressProvider().remoteAddress()->ip()->addressAsString();
+    ENVOY_LOG(trace, "Received trace without request history; sending upstream");
     if (sender_ip == config_->local_ip_) {
       // Outgoing (from app)
-      // TODO indicate we did this to the trace originator
-      ENVOY_LOG(error, "Setting should_spray_");
+      ENVOY_LOG(trace, "Setting should_spray_");
+      // TODO when send bits back to trace originator: Also indicate that we did this
+      ENVOY_LOG(warn, "WTF trace (orig request ID {}) has no history. Trace was let through to app, "
+                      "and any follow-on traces will be sprayed to their dest cluster", orig_request_id);
       trace_to_spray.emplace(Stats::MsgHistory::RequestSent({}, &headers));
     }
 
@@ -167,13 +167,18 @@ FilterHeadersStatus AlpnFilter::decodeHeaders(RequestHeaderMap &headers,
   bool sent_a_request = false;
   if (!msg_history.handled) {
     for (const Stats::MsgHistory::RequestSent& request_sent : msg_history.requests_sent) {
+      // This IP is where we try to send it; load balancer will pick a different host if that one's unhealthy
+      std::string cluster_name = request_sent.endpoint.substr(0, request_sent.endpoint.find(":"));
+      std::string cluster_endpoint = request_sent.endpoint.substr(request_sent.endpoint.find(":") + 1);
+      ENVOY_LOG(error, "[{}] Sending WTF trace\nOriginal request ID: {}\nUpstream cluster: {}\nUpstream endpoint: {}",
+                TraceRequestIdPrefix, orig_request_id, cluster_name, cluster_endpoint);
       if (sendHttpRequest(request_sent, orig_request_id)) {
         sent_a_request = true;
       }
     }
   } else {
     /** Recvd a trace for an ID we've already fully handled by sending all recorded messages */
-    ENVOY_LOG(error, "Trace was already fully handled");
+    ENVOY_LOG(trace, "Trace was already fully handled");
   }
 
   if (!sent_a_request) {
@@ -193,14 +198,14 @@ FilterHeadersStatus AlpnFilter::decodeHeaders(RequestHeaderMap &headers,
  */
 void AlpnFilter::log(const Http::RequestHeaderMap* req_hdrs, const Http::ResponseHeaderMap* resp_hdrs,
                      const Http::ResponseTrailerMap*, const StreamInfo::StreamInfo& stream_info) {
-  ENVOY_LOG(error, "log()");
+  ENVOY_LOG(trace, "log()");
   // TODO test request w/o response -- should send a message indicating that
 
   std::stringstream req_out;
   if (req_hdrs) req_hdrs->dumpState(req_out);
   std::stringstream resp_out;
   if (resp_hdrs) resp_hdrs->dumpState(resp_out);
-  ENVOY_LOG(error, "req_hdrs: {}, resp_hdrs: {}", req_out.str(), resp_out.str());
+  ENVOY_LOG(trace, "req_hdrs: {}, resp_hdrs: {}", req_out.str(), resp_out.str());
 
   // 1. Error-checking prelude
   if (req_hdrs == nullptr) {
@@ -216,7 +221,7 @@ void AlpnFilter::log(const Http::RequestHeaderMap* req_hdrs, const Http::Respons
 
   if (!stripTracePrefix(x_request_id).empty()) {
     // Stream was a trace request => no need to record anything
-    ENVOY_LOG(error, "log: skipping recording trace");
+    ENVOY_LOG(trace, "log: skipping recording trace");
     return;
   }
 
@@ -263,7 +268,7 @@ void AlpnFilter::log(const Http::RequestHeaderMap* req_hdrs, const Http::Respons
  * end_stream is true if request (headers + any data) has been fully sent or received.
  */
 FilterDataStatus AlpnFilter::decodeData(Buffer::Instance& data, bool end_stream) {
-  ENVOY_LOG(error, "decodeData; data: {}, end_stream {}", data.toString().substr(0,24), end_stream);
+  ENVOY_LOG(trace, "decodeData; data: {}, end_stream {}", data.toString().substr(0,24), end_stream);
   if (!in_flight_requests_.empty()) {
     // Continuing here would restart a filter chain stopped upon sending a trace
     return FilterDataStatus::StopIterationNoBuffer;
@@ -278,8 +283,8 @@ FilterDataStatus AlpnFilter::decodeData(Buffer::Instance& data, bool end_stream)
 FilterHeadersStatus AlpnFilter::encodeHeaders(ResponseHeaderMap& headers, bool end_stream) {
   std::stringstream out;
   headers.dumpState(out);
-  ENVOY_LOG(error, "encodeHeaders; headers: {}, end_stream {}, whoami {}", out.str(), end_stream, whoami);
-  ENVOY_LOG(error, "should_spray: {}", trace_to_spray.has_value());
+  ENVOY_LOG(trace, "encodeHeaders; headers: {}, end_stream {}, whoami {}", out.str(), end_stream, whoami);
+  ENVOY_LOG(trace, "should_spray: {}", trace_to_spray.has_value());
   if (!trace_to_spray.has_value()) return FilterHeadersStatus::Continue;
 
   absl::string_view responding_endpoint;
@@ -287,13 +292,13 @@ FilterHeadersStatus AlpnFilter::encodeHeaders(ResponseHeaderMap& headers, bool e
     Upstream::HostDescriptionConstSharedPtr responding_endpoint_ptr = upstream_info->upstreamHost();
     if (responding_endpoint_ptr && responding_endpoint_ptr->address()) {
       responding_endpoint = responding_endpoint_ptr->address()->asStringView();
-      ENVOY_LOG(error, "host: {}", responding_endpoint);
+      ENVOY_LOG(trace, "host: {}", responding_endpoint);
     } else {
       ENVOY_LOG(error, "Could not spray to cluster due to missing upstream host info");
       return FilterHeadersStatus::Continue;
     }
   } else {
-    ENVOY_LOG(error, "Could not spray to cluster due to missing upstream info");
+    ENVOY_LOG(trace, "Could not spray to cluster due to missing upstream info");
     return FilterHeadersStatus::Continue;
   }
 
@@ -302,7 +307,7 @@ FilterHeadersStatus AlpnFilter::encodeHeaders(ResponseHeaderMap& headers, bool e
   bool sent_a_request = false;
   if (upstream_cluster_info.has_value() && upstream_cluster_info.value()) {
     absl::string_view cluster_name = upstream_cluster_info.value()->name();
-    ENVOY_LOG(error, "upstream cluster: {}", cluster_name);
+    ENVOY_LOG(trace, "upstream cluster: {}", cluster_name);
     const auto thread_local_cluster = config_->cluster_manager_.getThreadLocalCluster(cluster_name);
     Envoy::Upstream::HostMapConstSharedPtr cluster_endpoints = thread_local_cluster->prioritySet().crossPriorityHostMap();
     if (!cluster_endpoints) {
@@ -312,8 +317,11 @@ FilterHeadersStatus AlpnFilter::encodeHeaders(ResponseHeaderMap& headers, bool e
     }
     for (auto it = cluster_endpoints->begin(); it != cluster_endpoints->end(); it++) {
       absl::string_view cluster_endpoint = it->first;
+      absl::string_view orig_request_id = trace_to_spray.value().headers->getRequestIdValue();
+      ENVOY_LOG(error, "[{}] Sending WTF trace\nOriginal request ID: {}\nUpstream cluster: {}\nUpstream endpoint: {}",
+                TraceRequestIdPrefix, orig_request_id, cluster_name, cluster_endpoint);
       if (cluster_endpoint != responding_endpoint) {
-        ENVOY_LOG(error, "Spraying to {}", cluster_endpoint);
+        ENVOY_LOG(trace, "Spraying to {}", cluster_endpoint);
         std::string cluster_host = std::string(cluster_name) + ":" + std::string(cluster_endpoint);
         trace_to_spray.value().endpoint = cluster_host;
         if (sendHttpRequest(trace_to_spray.value())) {
@@ -329,7 +337,6 @@ FilterHeadersStatus AlpnFilter::encodeHeaders(ResponseHeaderMap& headers, bool e
 
   if (sent_a_request) {
     // Wait for requests to be sent before destroying filter
-    ENVOY_LOG(error, "Stopping iteration after spraying");
     return FilterHeadersStatus::StopIteration;
   } else {
     return FilterHeadersStatus::Continue;
@@ -341,7 +348,7 @@ FilterHeadersStatus AlpnFilter::encodeHeaders(ResponseHeaderMap& headers, bool e
  * end_stream is true if response (headers + any data) has been fully sent or received.
  */
 FilterDataStatus AlpnFilter::encodeData(Buffer::Instance& data, bool end_stream) {
-  ENVOY_LOG(error, "encodeData; data: {}, end_stream {}", data.toString().substr(0,24), end_stream);
+  ENVOY_LOG(trace, "encodeData; data: {}, end_stream {}", data.toString().substr(0,24), end_stream);
   if (!in_flight_requests_.empty()) {
     // Continuing here would restart a filter chain stopped upon sending a trace
     return FilterDataStatus::StopIterationNoBuffer;
@@ -350,7 +357,7 @@ FilterDataStatus AlpnFilter::encodeData(Buffer::Instance& data, bool end_stream)
 }
 
 void AlpnFilter::onDestroy() {
-  ENVOY_LOG(error, "onDestroy");
+  ENVOY_LOG(trace, "onDestroy");
   for (const auto& in_flight_request : in_flight_requests_) {
     ENVOY_LOG(error, "Destroying filter with request still in flight");
     in_flight_request->cancel();
