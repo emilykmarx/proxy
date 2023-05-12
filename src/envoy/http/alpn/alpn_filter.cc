@@ -1,3 +1,5 @@
+#include <unordered_map>
+
 #include "src/envoy/http/alpn/alpn_filter.h"
 #include "source/common/http/headers.h"
 #include "source/common/http/message_impl.h"
@@ -120,6 +122,17 @@ FilterHeadersStatus AlpnFilter::decodeHeaders(RequestHeaderMap &headers,
   }
   absl::string_view orig_request_id = stripTracePrefix(x_request_id);
   std::string sender_ip = decoder_callbacks_->streamInfo().downstreamAddressProvider().remoteAddress()->ip()->addressAsString();
+
+  // Drop 10% of incoming details GET requests (don't drop traces or outgoing requests)
+  // This is for fault injection testing only!
+  std::hash<std::string> hasher;
+  size_t rand = hasher(std::string(x_request_id)) % 100; // get a random number that changes for each filter
+  if (orig_request_id.empty() && sender_ip != config_->local_ip_ && headers.getPathValue().find("details") != absl::string_view::npos && rand < 10) {
+    ENVOY_LOG(error, "Reset stream for fault injection test: {}", out_headers.str());
+    decoder_callbacks_->resetStream();
+    return FilterHeadersStatus::StopIteration;
+  }
+
 
   if (orig_request_id.empty()) {
     ENVOY_LOG(trace, "normal request");
