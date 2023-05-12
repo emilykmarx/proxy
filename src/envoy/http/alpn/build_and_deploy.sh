@@ -3,7 +3,7 @@
 set -e
 
 minikube delete --all
-minikube start & # hopefully fast enough
+minikube start --memory 16384 --cpus 10 & # hopefully fast enough
 
 pushd ~/go/src/istio.io/proxy
 bazel build --override_repository="envoy=/home/emily/go/src/envoyproxy.io/envoy" //src/envoy:envoy

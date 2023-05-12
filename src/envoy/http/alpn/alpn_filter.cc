@@ -114,10 +114,13 @@ FilterHeadersStatus AlpnFilter::decodeHeaders(RequestHeaderMap &headers,
 
   absl::string_view x_request_id = headers.getRequestIdValue();
   if (x_request_id.empty()) {
-    ENVOY_LOG(warn, "Non-trace request missing request ID in decodeHeaders(); won't be able to record history");
+    // This is really a warn, but I want it to show up and don't want to deal with istio's log level system
+    ENVOY_LOG(error, "Non-trace request missing request ID in decodeHeaders(); won't be able to record history");
     return FilterHeadersStatus::Continue;
   }
   absl::string_view orig_request_id = stripTracePrefix(x_request_id);
+  std::string sender_ip = decoder_callbacks_->streamInfo().downstreamAddressProvider().remoteAddress()->ip()->addressAsString();
+
   if (orig_request_id.empty()) {
     ENVOY_LOG(trace, "normal request");
     // Normal request => let it through
@@ -130,12 +133,11 @@ FilterHeadersStatus AlpnFilter::decodeHeaders(RequestHeaderMap &headers,
    *  Stats returns a copy before releasing the lock, so ok if another thread deletes while
    *  we're handling the trace. */
 
-  std::string sender_ip = decoder_callbacks_->streamInfo().downstreamAddressProvider().remoteAddress()->ip()->addressAsString();
   absl::string_view sender_endpoint = decoder_callbacks_->streamInfo().downstreamAddressProvider().remoteAddress()->asStringView();
 
   // Haven't found a way to get downstream cluster name here (not virtualClusterName, not upstreamClusterInfo (from either decoder or encoder cb),
   // not downstreamAddressProvider)
-  ENVOY_LOG(error, "[{}] Received WTF trace\nOriginal request ID: {}\nDownstream endpoint: {}",
+  ENVOY_LOG(error, "[{}] {}\nReceived WTF trace\nDownstream endpoint: {}",
             TraceRequestIdPrefix, orig_request_id, sender_endpoint);
   std::any msg_history_ret =
       config_->stats_.msg_history_.getMsgHistory(orig_request_id);
@@ -147,14 +149,16 @@ FilterHeadersStatus AlpnFilter::decodeHeaders(RequestHeaderMap &headers,
      *  If outgoing (from app): Let it through, and we'll spray it across the rest of the destination service cluster
      *  upon receiving response (would spray now, but don't know dest cluster yet).
      *  If incoming: Send to app; app will generate any follow-on requests, which another filter will spray on outgoing path. */
-    ENVOY_LOG(trace, "Received trace without request history; sending upstream");
     if (sender_ip == config_->local_ip_) {
       // Outgoing (from app)
       ENVOY_LOG(trace, "Setting should_spray_");
-      // TODO when send bits back to trace originator: Also indicate that we did this
-      ENVOY_LOG(warn, "WTF trace (orig request ID {}) has no history. Trace was let through to app, "
-                      "and any follow-on traces will be sprayed to their dest cluster", orig_request_id);
       trace_to_spray.emplace(Stats::MsgHistory::RequestSent({}, &headers));
+    } else {
+      // TODO when send bits back to trace originator: Also indicate that we did this
+      // This is really a warn, but I want it to show up and don't want to deal with istio's log level system
+      ENVOY_LOG(error, "[{}] {}\nWTF trace has no history. Trace will be let through to app, "
+                        "and any follow-on traces will be sprayed to their dest cluster",
+                TraceRequestIdPrefix, orig_request_id);
     }
 
     return FilterHeadersStatus::Continue;
@@ -170,7 +174,7 @@ FilterHeadersStatus AlpnFilter::decodeHeaders(RequestHeaderMap &headers,
       // This IP is where we try to send it; load balancer will pick a different host if that one's unhealthy
       std::string cluster_name = request_sent.endpoint.substr(0, request_sent.endpoint.find(":"));
       std::string cluster_endpoint = request_sent.endpoint.substr(request_sent.endpoint.find(":") + 1);
-      ENVOY_LOG(error, "[{}] Sending WTF trace\nOriginal request ID: {}\nUpstream cluster: {}\nUpstream endpoint: {}",
+      ENVOY_LOG(error, "[{}] {}\nSending WTF trace\nUpstream cluster: {}\nUpstream endpoint: {}",
                 TraceRequestIdPrefix, orig_request_id, cluster_name, cluster_endpoint);
       if (sendHttpRequest(request_sent, orig_request_id)) {
         sent_a_request = true;
@@ -199,7 +203,7 @@ FilterHeadersStatus AlpnFilter::decodeHeaders(RequestHeaderMap &headers,
 void AlpnFilter::log(const Http::RequestHeaderMap* req_hdrs, const Http::ResponseHeaderMap* resp_hdrs,
                      const Http::ResponseTrailerMap*, const StreamInfo::StreamInfo& stream_info) {
   ENVOY_LOG(trace, "log()");
-  // TODO test request w/o response -- should send a message indicating that
+  // TODO handle request w/o response better? (Has no upstream info)
 
   std::stringstream req_out;
   if (req_hdrs) req_hdrs->dumpState(req_out);
@@ -317,8 +321,8 @@ FilterHeadersStatus AlpnFilter::encodeHeaders(ResponseHeaderMap& headers, bool e
     }
     for (auto it = cluster_endpoints->begin(); it != cluster_endpoints->end(); it++) {
       absl::string_view cluster_endpoint = it->first;
-      absl::string_view orig_request_id = trace_to_spray.value().headers->getRequestIdValue();
-      ENVOY_LOG(error, "[{}] Sending WTF trace\nOriginal request ID: {}\nUpstream cluster: {}\nUpstream endpoint: {}",
+      absl::string_view orig_request_id = stripTracePrefix(trace_to_spray.value().headers->getRequestIdValue());
+      ENVOY_LOG(error, "[{}] {}\nSending WTF trace\nUpstream cluster: {}\nUpstream endpoint: {}",
                 TraceRequestIdPrefix, orig_request_id, cluster_name, cluster_endpoint);
       if (cluster_endpoint != responding_endpoint) {
         ENVOY_LOG(trace, "Spraying to {}", cluster_endpoint);
