@@ -14,11 +14,6 @@ import matplotlib.pyplot as plt
 import random
 import re
 
-"""
-TODO
-- test on trace w/o history
-"""
-
 G = nx.MultiDiGraph()
 
 def bookinfo_curl_productpage(is_trace, request_id):
