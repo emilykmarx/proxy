@@ -13,19 +13,14 @@
  * limitations under the License.
  */
 
-syntax = "proto3";
+#include "src/envoy/tcp/metadata_exchange/metadata_exchange_initial_header.h"
 
-package envoy.tcp.wtfagent.config;
+namespace Envoy {
+namespace Tcp {
+namespace MetadataExchange {
 
-option java_outer_classname = "WTFAgentProto";
-option java_multiple_files = true;
-option java_package = "io.envoyproxy.envoy.tcp.wtfagent.config";
-option go_package = "WTFAgent";
+const uint32_t MetadataExchangeInitialHeader::magic_number;
 
-// [#protodoc-title: WTFAgent protocol match and data transfer]
-// WTFAgent protocol match and data transfer
-message WTFAgent {
-  // Protocol that Alpn should support on the server.
-  // [#comment:TODO(GargNupur): Make it a list.]
-  string protocol = 1;
-}
+}  // namespace MetadataExchange
+}  // namespace Tcp
+}  // namespace Envoy

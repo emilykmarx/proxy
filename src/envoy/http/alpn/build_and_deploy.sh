@@ -18,3 +18,5 @@ kubectl apply -f samples/bookinfo/platform/kube/bookinfo.yaml
 kubectl apply -f ../proxy/src/envoy/http/alpn/alpn.yaml
 
 popd
+
+# TODO delete

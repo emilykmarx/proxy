@@ -20,7 +20,7 @@ spec:
     patch:
       operation: INSERT_BEFORE
       value:
-        name: "istio.alpn" # Not sure if matters
+        name: "istio.wtf_agent_alpn" # Not sure what the proxyStatsMatcher looks at; either this or the metadata name??
         typed_config:
           "@type": type.googleapis.com/udpa.type.v1.TypedStruct
           type_url: "type.googleapis.com/istio.envoy.config.filter.http.alpn.v2alpha1.FilterConfig"
