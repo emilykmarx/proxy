@@ -24,6 +24,7 @@ class AlpnConfigFactory
   Http::FilterFactoryCb createFilterFactory(
       const istio::envoy::config::filter::http::alpn::v2alpha1::FilterConfig
           &config_pb,
+          std::string node_id,
       absl::string_view local_ip,
       Upstream::ClusterManager &cluster_manager,
       Stats::Scope& local_scope, Stats::Scope& root_scope);

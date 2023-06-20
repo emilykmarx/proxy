@@ -1,13 +1,16 @@
 apiVersion: networking.istio.io/v1alpha3
 kind: EnvoyFilter
 metadata:
+  # Note: Not sure what the proxyStatsMatcher matches on.
+  # It's not just the names here, since removing `alpn` from those and changing the regex to `wtf`
+  # breaks the envoy side of stats. Likely need to change the stat prefix in filter code.
   name: wtf-agent-alpn
   namespace: default
 spec:
   priority: -1
   configPatches:
   - applyTo: HTTP_FILTER
-    match:
+    match: &mymatch
       # Seems to give the same result as ANY, except ANY causes 2 filter instances to be created
       # when a request is sent (but both instances have the same streamId.)
       context: SIDECAR_INBOUND
@@ -17,10 +20,15 @@ spec:
             name: envoy.filters.network.http_connection_manager
             subFilter:
               name: envoy.filters.http.router
-    patch:
+    patch: &mypatch
       operation: INSERT_BEFORE
       value:
-        name: "istio.wtf_agent_alpn" # Not sure what the proxyStatsMatcher looks at; either this or the metadata name??
+        name: "istio.wtf_agent_alpn"
         typed_config:
           "@type": type.googleapis.com/udpa.type.v1.TypedStruct
           type_url: "type.googleapis.com/istio.envoy.config.filter.http.alpn.v2alpha1.FilterConfig"
+  - applyTo: HTTP_FILTER
+    match:
+      <<: *mymatch
+      context: GATEWAY
+    patch: *mypatch

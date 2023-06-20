@@ -8,10 +8,10 @@ namespace Alpn {
 
 /**
  * Cleanup TODOs:
- * - remove/downgrade debug logging
 // - properly integrate this into proxy as a new filter.
 // Put it here for now bc I didn't want to figure out how to do that.
 // At least rename "alpn" to the extent possible.
+// (But be careful - see note in filter yaml)
 // - audit for null check before every ->, and no value() (throws if no value)
 */
 static constexpr char StatPrefix[] = "alpn.";
@@ -23,10 +23,12 @@ const std::string TraceRequestIdPrefix = "WTFTRACE";
 AlpnFilterConfig::AlpnFilterConfig(
     const istio::envoy::config::filter::http::alpn::v2alpha1::FilterConfig
         &,
+        std::string node_id,
     absl::string_view local_ip,
     Upstream::ClusterManager &cluster_manager,
     Stats::Scope& local_scope, Stats::Scope& root_scope)
-    : local_ip_(local_ip),
+    : node_id(node_id),
+    local_ip_(local_ip),
       cluster_manager_(cluster_manager),
       stats_(generateStats(StatPrefix, local_scope)),
       root_scope_(root_scope) {
@@ -139,6 +141,7 @@ FilterHeadersStatus AlpnFilter::decodeHeaders(RequestHeaderMap &headers,
   // not downstreamAddressProvider)
   ENVOY_LOG(error, "[{}] {}\nReceived WTF trace\nDownstream endpoint: {}",
             TraceRequestIdPrefix, orig_request_id, sender_endpoint);
+  // This also marks handled (TODO should change that - probably a confusing API)
   std::any msg_history_ret =
       config_->stats_.msg_history_.getMsgHistory(orig_request_id);
 
@@ -146,9 +149,10 @@ FilterHeadersStatus AlpnFilter::decodeHeaders(RequestHeaderMap &headers,
   // EASYTODO rename MsgHistory, msg_history, msg_history_ to "request_id_history"
   if (!msg_history_ret.has_value()) {
     /** Request history was lost, or never existed =>
-     *  If outgoing (from app): Let it through, and we'll spray it across the rest of the destination service cluster
+     *  If outgoing (from app or locally initiated trace): Let it through, and we'll spray it across the rest of the destination service cluster
      *  upon receiving response (would spray now, but don't know dest cluster yet).
-     *  If incoming: Send to app; app will generate any follow-on requests, which another filter will spray on outgoing path. */
+     *  If incoming: Send to app; app will generate any follow-on requests, which another filter will spray on outgoing path.
+     *  Unless we're the ingress gateway, in which case there's no app => act as if outgoing */
     if (sender_ip == config_->local_ip_) {
       // Outgoing (from app)
       ENVOY_LOG(trace, "Setting should_spray_");
@@ -156,16 +160,21 @@ FilterHeadersStatus AlpnFilter::decodeHeaders(RequestHeaderMap &headers,
     } else {
       // TODO when send bits back to trace originator: Also indicate that we did this
       // This is really a warn, but I want it to show up and don't want to deal with istio's log level system
-      ENVOY_LOG(error, "[{}] {}\nWTF trace has no history. Trace will be let through to app, "
-                        "and any follow-on traces will be sprayed to their dest cluster",
+      ENVOY_LOG(error, "[{}] {}\nWTF trace has no history. Trace will be let through to app "
+                       "(or to cluster, if this is an ingress gateway), "
+                       "and any follow-on traces will be sprayed to their dest cluster",
                 TraceRequestIdPrefix, orig_request_id);
+      if (config_->node_id.find("istio-ingressgateway") != std::string::npos) {
+        ENVOY_LOG(trace, "Setting should_spray_");
+        trace_to_spray.emplace(Stats::MsgHistory::RequestSent({}, &headers));
+      }
     }
 
     return FilterHeadersStatus::Continue;
   }
 
   /** Send all recorded requests (to their original nbrs, with original hdrs)
-   *  simultaneously and mark handled, if haven't yet (note each original request ID can only be traced once
+   *  simultaneously, if haven't yet (note each original request ID can only be traced once
    *  over the lifetime of a proxy -- likely easy to change by adding a "trace ID"). */
   Stats::MsgHistory msg_history = std::any_cast<Stats::MsgHistory>(msg_history_ret);
   bool sent_a_request = false;
@@ -258,11 +267,13 @@ void AlpnFilter::log(const Http::RequestHeaderMap* req_hdrs, const Http::Respons
     // 2. Record upstream host to which we sent the request
     // EASYTODO make map value a pair rather than cluster_name:IP (incl port)
     // absl::string_view does not like to concatenate
+    ENVOY_LOG(trace, "Recording send for request {}; upstream_host {}", x_request_id, upstream_host);
     config_->stats_.msg_history_.insert_request_sent(x_request_id, upstream_host, req_hdrs);
   } else {
     /** This filter was the upstream i.e. received the request => record w/o upstream.
      *  This way we still have history even for requests that didn't result in any other requests
      *  (so we don't unnecessarily bother the app) */
+    ENVOY_LOG(trace, "Recording recv for request {}", x_request_id);
     config_->stats_.msg_history_.insert_request_recvd(x_request_id);
   }
 }
@@ -322,6 +333,7 @@ FilterHeadersStatus AlpnFilter::encodeHeaders(ResponseHeaderMap& headers, bool e
     for (auto it = cluster_endpoints->begin(); it != cluster_endpoints->end(); it++) {
       absl::string_view cluster_endpoint = it->first;
       absl::string_view orig_request_id = stripTracePrefix(trace_to_spray.value().headers->getRequestIdValue());
+      // If this is the responding endpoint, we actually already sent, but keep log message here to make plotting simpler
       ENVOY_LOG(error, "[{}] {}\nSending WTF trace\nUpstream cluster: {}\nUpstream endpoint: {}",
                 TraceRequestIdPrefix, orig_request_id, cluster_name, cluster_endpoint);
       if (cluster_endpoint != responding_endpoint) {
